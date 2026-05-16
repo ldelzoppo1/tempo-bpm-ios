@@ -129,6 +129,7 @@ final class BeatDetector {
             state.avgBPM = 0
             state.stability = 0
             state.beatFlash = false
+            state.currentBeat = 0
         }
     }
 
@@ -226,6 +227,8 @@ final class BeatDetector {
             state.maxBPM = maxBPM
             state.avgBPM = avgBPM
             state.stability = stabilitySnapshot
+            let sig = state.timeSignature.rawValue
+            state.currentBeat = (state.currentBeat + 1) % sig
             state.beatFlash = true
             try? await Task.sleep(nanoseconds: 100_000_000)  // 100ms
             state.beatFlash = false
