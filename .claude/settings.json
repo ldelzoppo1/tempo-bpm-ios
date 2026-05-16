@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__c63dc1ad-d888-4344-a02f-326a83d7930b__atlassianUserInfo",
+      "mcp__c63dc1ad-d888-4344-a02f-326a83d7930b__getAccessibleAtlassianResources",
+      "mcp__c63dc1ad-d888-4344-a02f-326a83d7930b__searchJiraIssuesUsingJql",
+      "mcp__c63dc1ad-d888-4344-a02f-326a83d7930b__getJiraIssue",
+      "mcp__c63dc1ad-d888-4344-a02f-326a83d7930b__createJiraIssue",
+      "mcp__c63dc1ad-d888-4344-a02f-326a83d7930b__editJiraIssue",
+      "mcp__c63dc1ad-d888-4344-a02f-326a83d7930b__transitionJiraIssue",
+      "mcp__c63dc1ad-d888-4344-a02f-326a83d7930b__addCommentToJiraIssue",
+      "mcp__c63dc1ad-d888-4344-a02f-326a83d7930b__getTransitionsForJiraIssue",
+      "mcp__c63dc1ad-d888-4344-a02f-326a83d7930b__getJiraProjectIssueTypesMetadata",
+      "mcp__dfac2c93-aa97-4562-8720-bb1f92eeffcf__get_metadata",
+      "mcp__dfac2c93-aa97-4562-8720-bb1f92eeffcf__get_design_context",
+      "mcp__dfac2c93-aa97-4562-8720-bb1f92eeffcf__get_screenshot",
+      "mcp__dfac2c93-aa97-4562-8720-bb1f92eeffcf__whoami",
+      "mcp__github__list_pull_requests",
+      "mcp__github__pull_request_read",
+      "mcp__github__get_file_contents",
+      "mcp__github__list_commits",
+      "mcp__github__list_branches",
+      "Bash(git *)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "Read(*)",
+      "Edit(*)",
+      "Write(*)"
+    ]
+  }
+}
