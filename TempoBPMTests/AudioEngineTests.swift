@@ -1,6 +1,7 @@
 import XCTest
 import AVFoundation
 import Accelerate
+import Darwin
 @testable import TempoBPM
 
 // MARK: - MockAudioBufferProvider
@@ -90,13 +91,13 @@ private final class SPSCRingBufferTestDouble {
             (storage + startSlot).assign(from: source, count: first)
             storage.assign(from: source + first, count: second)
         }
-        OSMemoryBarrier()
+        atomic_thread_fence(memory_order_seq_cst)
         writeIndex = writeIndex + toWrite
     }
 
     @discardableResult
     func read(into destination: UnsafeMutablePointer<Float>, count: Int) -> Int {
-        OSMemoryBarrier()
+        atomic_thread_fence(memory_order_seq_cst)
         let filled = writeIndex - readIndex
         let toRead = min(count, max(0, filled))
         guard toRead > 0 else { return 0 }
