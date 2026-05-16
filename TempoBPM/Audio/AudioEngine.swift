@@ -257,6 +257,14 @@ final class AudioEngine: AudioBufferProvider {
     /// Setup vDSP per il filtro LP 200 Hz.
     private var lpSetup: vDSP_biquad_Setup?
 
+    // TBD-28: buffer di delay (storia IIR) per i filtri biquad a singola precisione.
+    // Dimensione: 2 * sections + 2 = 2 * 1 + 2 = 4 elementi per sections = 1.
+    // Devono essere inizializzati a zero e mantenuti tra un buffer e l'altro:
+    // il filtro IIR usa l'output dei campioni precedenti; azzerarli ad ogni buffer
+    // introdurrebbe un transitorio all'inizio di ciascun blocco.
+    private var hpDelayBuffer: [Float] = [0, 0, 0, 0]
+    private var lpDelayBuffer: [Float] = [0, 0, 0, 0]
+
     // MARK: - Init
 
     init(state: BeatState) {
@@ -460,6 +468,12 @@ final class AudioEngine: AudioBufferProvider {
     /// `handlerPCMBuffer` pre-allocato, e chiama `captureHandler`.
     /// Continua a drenare finché ci sono campioni disponibili (per smaltire eventuali
     /// accodamenti multipli generati da burst di tap callback ravvicinati).
+    ///
+    /// TBD-28: prima di consegnare i campioni al captureHandler, applica in-place
+    /// la catena biquad HP@20Hz → LP@200Hz. Il filtraggio isola la banda kick drum
+    /// (20–200 Hz) rimuovendo DC offset e contenuto ad alta frequenza irrilevante.
+    /// I delay buffer (hpDelayBuffer, lpDelayBuffer) sono mantenuti tra i blocchi
+    /// per preservare la continuità del filtro IIR.
     private func drainRingBuffer() {
         guard let handler = captureHandler,
               let pcmBuffer = handlerPCMBuffer else { return }
@@ -473,7 +487,25 @@ final class AudioEngine: AudioBufferProvider {
             guard read > 0,
                   let channelData = pcmBuffer.floatChannelData else { break }
 
-            // Copia i campioni drenati nel PCMBuffer wrapper pre-allocato.
+            let n = vDSP_Length(read)
+
+            // TBD-28: Applica catena HP → LP in-place sul drainBuffer.
+            // Entrambi i filtri operano su drainBuffer direttamente (src == dst).
+            // vDSP_biquad supporta operazione in-place: il buffer di input e output
+            // possono coincidere.
+            //
+            // Guard su hpSetup e lpSetup: sono nil se start() non è ancora stato
+            // chiamato (o se computeFilterCoefficients non ha avuto successo).
+            // In quel caso consegniamo il segnale non filtrato piuttosto che
+            // silenziare l'output — comportamento fail-open coerente con l'architettura.
+            if let hp = hpSetup, let lp = lpSetup {
+                // Passo 1 — HP@20Hz: rimuove DC offset e contenuto sub-sonico.
+                vDSP_biquad(hp, &hpDelayBuffer, drainBuffer, 1, drainBuffer, 1, n)
+                // Passo 2 — LP@200Hz: isola la banda kick drum (20–200 Hz).
+                vDSP_biquad(lp, &lpDelayBuffer, drainBuffer, 1, drainBuffer, 1, n)
+            }
+
+            // Copia i campioni filtrati nel PCMBuffer wrapper pre-allocato.
             // `vDSP_mmov` non è disponibile per array 1-D; usiamo `cblas_scopy`
             // (Accelerate) — zero alloc, loop SIMD-ottimizzato.
             // In alternativa, memcpy è equivalente per Float32 senza stride.
