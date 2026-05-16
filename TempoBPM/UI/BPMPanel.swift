@@ -166,6 +166,7 @@ private struct DotsRow: View {
     /// Indice del dot attivo. -1 se nessun dot attivo (BPM == 0)
     private var activeDot: Int {
         guard currentBPM > 0 else { return -1 }
+        // TODO(TBD-44): placeholder — mappatura BPM→dot da sostituire con logica beat-phase definitiva (TBD-4)
         return Int(currentBPM / 30) % 8
     }
 
@@ -173,7 +174,7 @@ private struct DotsRow: View {
         HStack(spacing: 6) {
             ForEach(0..<8, id: \.self) { index in
                 Circle()
-                    .fill(index == activeDot ? Color.accentOrange : Color(hex: "#222222"))
+                    .fill(index == activeDot ? Color.accentOrange : Color.pillInactive)
                     .frame(width: 8, height: 8)
             }
         }
@@ -197,7 +198,7 @@ private struct StabilityRow: View {
                 ZStack(alignment: .leading) {
                     // Background
                     RoundedRectangle(cornerRadius: 2)
-                        .fill(Color(hex: "#222222"))
+                        .fill(Color.pillInactive)
                         .frame(height: 3)
 
                     // Fill
