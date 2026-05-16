@@ -1,5 +1,16 @@
 import Foundation
 
+enum TimeSignatureOption: Int, CaseIterable, Identifiable {
+    case three = 3
+    case four  = 4
+    case five  = 5
+    case six   = 6
+    case seven = 7
+
+    var id: Int { rawValue }
+    var label: String { "\(rawValue)/4" }
+}
+
 @Observable
 final class BeatState {
     // Scritto da BeatDetector, letto da UI
@@ -21,4 +32,8 @@ final class BeatState {
     // Scritto da CronoPanel (UI)
     var concertElapsed: TimeInterval = 0
     var concertRunning: Bool = false
+    var timeSignature: TimeSignatureOption = .four
+
+    // Scritto da BeatDetector (Audio layer) — la UI legge, non scrive mai
+    var currentBeat: Int = 0
 }
