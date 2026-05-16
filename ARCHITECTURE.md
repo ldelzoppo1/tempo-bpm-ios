@@ -238,7 +238,7 @@ final class BeatDetector {
 ### TapTempo (pubblico)
 ```swift
 final class TapTempo {
-    init(state: BeatState)
+    init(state: BeatState, now: @escaping () -> Double = CFAbsoluteTimeGetCurrent)
     func registerTap()         // chiamato dalla UI (main thread)
     func reset()
 }
