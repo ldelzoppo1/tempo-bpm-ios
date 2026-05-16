@@ -230,6 +230,8 @@ final class AudioEngine {
 final class BeatDetector {
     init(state: BeatState)
     func process(buffer: AVAudioPCMBuffer)  // chiamato dalla DSP queue
+    func reset()                            // azzera stato sessione; chiamare solo dopo stopCapture()
+    var currentThreshold: Float { get }    // espone la soglia adattiva corrente per i test
 }
 ```
 
