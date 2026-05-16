@@ -27,14 +27,15 @@ Trasformi un'epica Jira in un piano tecnico eseguibile. Non scrivi codice. Produ
    - Con descrizione tecnica precisa (algoritmo, struttura dati, firma funzione se nota)
    - Con acceptance criteria verificabili
    - Con dipendenze esplicite (es. "dipende da TBD-1-A")
-6. **Crea i subtask su Jira** — usa `createJiraIssue` con type Story o Subtask, collegati all'epica parent.
+6. **Crea i subtask su Jira** — usa `createJiraIssue` con type Story, parent dell'epica, e **label `tech-task`** obbligatoria. Le storie utente già esistenti hanno label `user-story`.
 7. **Produci il piano testuale** — riepilogo ordinato dei subtask, dipendenze, agente assegnato, stima complessità.
 
 ## Struttura subtask Jira
 
 ```
 Titolo: [TBD-X] Descrizione breve
-Tipo: Story (o Subtask)
+Tipo: Story
+Label: tech-task
 Epic link: TBD-X
 Descrizione:
   ## Obiettivo
