@@ -16,7 +16,7 @@ private extension Color {
 /// Root view dell'app. Compone l'header e tutti i panel.
 /// BeatState viene iniettato da TempoBPMApp via .environment(beatState).
 struct ContentView: View {
-    let onTap: () -> Void = {}
+    var onTap: () -> Void = {}
 
     @Environment(BeatState.self) private var beatState
 
