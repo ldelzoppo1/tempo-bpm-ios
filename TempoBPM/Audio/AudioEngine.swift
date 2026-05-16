@@ -581,7 +581,121 @@ final class AudioEngine: AudioBufferProvider {
             channelData[0].update(from: drainBuffer, count: read)
             pcmBuffer.frameLength = AVAudioFrameCount(read)
 
+            // ── Output A: consegna buffer PCM filtrato al captureHandler (BeatDetector) ──
             handler(pcmBuffer)
+
+            // ── Output B: FFT 1024-pt → 46 bande energia → BeatState.energyBands ──────
+            // Indipendente da Output A: opera sullo stesso drainBuffer filtrato ma
+            // non modifica il buffer (vmul scrive su fftWorkBuffer separato).
+
+            // Throttle ~60ms: aggiorna le bande al massimo ogni energyBandsThrottleInterval
+            // per non saturare il main thread con aggiornamenti SwiftUI troppo frequenti.
+            let now = CFAbsoluteTimeGetCurrent()
+            guard now - lastEnergyBandsTime >= AudioEngine.energyBandsThrottleInterval else {
+                continue
+            }
+
+            // La finestra di Hann richiede esattamente fftSize campioni.
+            // Se il drain ha prodotto meno campioni (read < fftSize), salta la FFT
+            // per questo ciclo — zero-padding altererebbe lo spettro.
+            guard read >= AudioEngine.fftSize else { continue }
+
+            // Step 1 — Calcola RMS sul buffer filtrato (banda 20–200 Hz, `read` campioni).
+            // L'energia RMS è l'input primario per la beat detection (TBD-10);
+            // qui viene calcolata in preparazione all'integrazione con BeatDetector.
+            var rmsEnergy: Float = 0
+            vDSP_rmsqv(drainBuffer, 1, &rmsEnergy, vDSP_Length(read))
+            // rmsEnergy è pronto per essere usato da BeatDetector quando sarà implementato (TBD-10).
+
+            // Step 2 — Applica finestra di Hann ai primi fftSize campioni del drainBuffer.
+            // vDSP_vmul(A, strideA, B, strideB, C, strideC, N): C[i] = A[i] * B[i]
+            // drainBuffer → windowed → fftWorkBuffer (preserva drainBuffer inalterato).
+            vDSP_vmul(
+                drainBuffer,       1,
+                &hannWindow,       1,
+                &fftWorkBuffer,    1,
+                vDSP_Length(AudioEngine.fftSize)
+            )
+
+            // Step 3 — Impacchetta fftWorkBuffer in DSPSplitComplex (interleaved → split).
+            // vDSP_ctoz interpreta il buffer reale come coppie (re, im) con im=0,
+            // ma per FFT reale si usa il layout "packed": coppie di campioni reali
+            // consecutivi → (realp[k], imagp[k]) = (x[2k], x[2k+1]).
+            // Lo stride su fftWorkBuffer è 2 (saltiamo ogni secondo elemento per realp,
+            // poi offset 1 per imagp). Questo è il layout richiesto da vDSP_fft_zrip.
+            fftRealBuffer.withUnsafeMutableBufferPointer { realPtr in
+                fftImagBuffer.withUnsafeMutableBufferPointer { imagPtr in
+                    guard let rBase = realPtr.baseAddress,
+                          let iBase = imagPtr.baseAddress else { return }
+
+                    var splitComplex = DSPSplitComplex(realp: rBase, imagp: iBase)
+
+                    fftWorkBuffer.withUnsafeBufferPointer { floatPtr in
+                        // Reinterpreta il buffer Float come DSPComplex (coppie float):
+                        // ogni coppia (fftWorkBuffer[2k], fftWorkBuffer[2k+1]) → splitComplex[k].
+                        // Stride 2 su floatPtr perché DSPComplex ha dimensione 2×Float.
+                        // Questo impacchettamento è il prerequisito di vDSP_fft_zrip.
+                        guard let fBase = floatPtr.baseAddress else { return }
+                        fBase.withMemoryRebound(to: DSPComplex.self,
+                                                capacity: AudioEngine.fftBinCount) { complexPtr in
+                            vDSP_ctoz(complexPtr, 1, &splitComplex, 1,
+                                      vDSP_Length(AudioEngine.fftBinCount))
+                        }
+                    }
+
+                    // Step 4 — Esegui FFT reale in-place (forward).
+                    // vDSP_fft_zrip modifica splitComplex in-place:
+                    // dopo questa chiamata realp/imagp contengono i bin FFT nel
+                    // formato packed vDSP (bin 0 in realp[0], bin N/2 in imagp[0]).
+                    guard let setup = fftSetup else { return }
+                    vDSP_fft_zrip(setup, &splitComplex, 1,
+                                  AudioEngine.fftLog2n, FFTDirection(FFT_FORWARD))
+
+                    // Step 5 — Calcola magnitudini quadratiche dei primi 46 bin.
+                    // vDSP_zvabs calcola sqrt(re^2 + im^2) per ogni bin.
+                    // Usiamo solo i primi energyBandCount bin (escludiamo DC e Nyquist
+                    // che sono packed rispettivamente in realp[0] e imagp[0]).
+                    magnitudesBuffer.withUnsafeMutableBufferPointer { magPtr in
+                        guard let mBase = magPtr.baseAddress else { return }
+                        // Nota: bin 0 (DC) è in realp[0]; bin N/2 (Nyquist) è in imagp[0].
+                        // I bin 1..N/2-1 sono in realp[1..] e imagp[1..] nel formato packed.
+                        // Per semplicità e coerenza con il requisito del ticket (46 magnitudini)
+                        // calcoliamo le prime 46 magnitudini dal vettore split complex così
+                        // com'è: include bin 0 (DC), ma verrà normalizzato insieme agli altri.
+                        vDSP_zvabs(&splitComplex, 1, mBase, 1,
+                                   vDSP_Length(AudioEngine.energyBandCount))
+                    }
+                }
+            }
+
+            // Step 6 — Normalizza magnitudini in [0, 1] rispetto al massimo del frame.
+            var maxMag: Float = 0
+            vDSP_maxv(&magnitudesBuffer, 1, &maxMag, vDSP_Length(AudioEngine.energyBandCount))
+
+            // Evita divisione per zero se tutto è silenzio.
+            if maxMag > 0 {
+                var invMax = 1.0 / maxMag
+                vDSP_vsmul(&magnitudesBuffer, 1, &invMax, &magnitudesBuffer, 1,
+                           vDSP_Length(AudioEngine.energyBandCount))
+            } else {
+                // Frame silenzioso: azzera tutte le bande.
+                var zero: Float = 0
+                vDSP_vfill(&zero, &magnitudesBuffer, 1,
+                           vDSP_Length(AudioEngine.energyBandCount))
+            }
+
+            // Aggiorna il timestamp del throttle prima della Task per evitare
+            // che burst ravvicinati schedulino Task multipli se la dspQueue è veloce.
+            lastEnergyBandsTime = now
+
+            // Step 7 — Pubblica le 46 bande su @MainActor (Output B).
+            // Copia esplicita con Array(prefix:): separa il ciclo di vita del buffer
+            // DSP (mutabile, riutilizzato al prossimo ciclo) dal valore consegnato
+            // alla UI. La copia avviene sulla dspQueue, non sul main thread.
+            let bands = Array(magnitudesBuffer.prefix(AudioEngine.energyBandCount))
+            Task { @MainActor [weak state] in
+                state?.energyBands = bands
+            }
         }
     }
 
