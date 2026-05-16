@@ -98,8 +98,9 @@ final class BeatDetectorTests: XCTestCase {
         await fulfillment(of: [expectation], timeout: 0.15)
         observationTask.cancel()
 
-        XCTAssertTrue(state.beatFlash,
-            "beatFlash deve essere true dopo un onset rilevato con RMS >> soglia")
+        // Non asserire state.beatFlash qui: il flag potrebbe già essere tornato false
+        // dopo i 100ms della finestra beatFlash. La fulfillment dell'expectation è la
+        // prova sufficiente che beatFlash è stato true durante l'osservazione.
     }
 
     // MARK: - Test 3: Periodo refrattario — secondo onset ravvicinato viene ignorato
@@ -354,7 +355,7 @@ final class BeatDetectorTests: XCTestCase {
     ///
     /// Questo test è sincrono: non richiede async perché currentThreshold è aggiornato
     /// in modo sincrono da process(), senza passare per @MainActor.
-    func test_ema_trentaBufferARMS01_sogliaConvergeVerso01() {
+    func test_ema_quarantaseiBufferARMS01_sogliaConvergeVerso01() {
         let state = BeatState()
         let detector = BeatDetector(state: state)
 
