@@ -7,17 +7,19 @@ struct TempoBPMApp: App {
     @State private var beatState: BeatState
     private let audioEngine: AudioEngine
     private let beatDetector: BeatDetector
+    private let tapTempo: TapTempo
 
     init() {
         let state = BeatState()
         _beatState = State(initialValue: state)
         audioEngine = AudioEngine(state: state)
         beatDetector = BeatDetector(state: state)
+        tapTempo = TapTempo(state: state)
     }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(onTap: tapTempo.registerTap)
                 .environment(beatState)
                 // TBD-47: osserva isListening e gestisce la pipeline audio.
                 // ContentView scrive solo beatState.isListening; TempoBPMApp
@@ -41,6 +43,7 @@ struct TempoBPMApp: App {
                     } else {
                         audioEngine.stopCapture()
                         beatDetector.reset()
+                        tapTempo.reset()
                     }
                     // Mantiene lo schermo acceso mentre l'ascolto è attivo.
                     UIApplication.shared.isIdleTimerDisabled = newValue

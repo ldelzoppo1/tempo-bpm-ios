@@ -16,6 +16,8 @@ private extension Color {
 /// Root view dell'app. Compone l'header e tutti i panel.
 /// BeatState viene iniettato da TempoBPMApp via .environment(beatState).
 struct ContentView: View {
+    let onTap: () -> Void = {}
+
     @Environment(BeatState.self) private var beatState
 
     @State private var pulseOpacity: Double = 1.0
@@ -42,8 +44,8 @@ struct ContentView: View {
                     }
                 }
 
-                // 5. TapPanel placeholder (TBD-5)
-                TapPanel()
+                // 5. TapPanel (TBD-5)
+                TapPanel(onTap: onTap)
 
                 // 6. CronoPanel placeholder (TBD-4)
                 CronoPanel()

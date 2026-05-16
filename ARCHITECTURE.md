@@ -250,10 +250,11 @@ final class TapTempo {
 ```swift
 @main struct TempoBPMApp: App {
     @State private var beatState = BeatState()
+    private let tapTempo: TapTempo
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(onTap: tapTempo.registerTap)
                 .environment(beatState)
         }
     }
