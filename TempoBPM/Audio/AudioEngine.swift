@@ -18,21 +18,22 @@ import Darwin
 ///
 /// ## Correttezza SPSC senza librerie esterne
 ///
-/// Usiamo due indici interi normali (`writeIndex`, `readIndex`) con `OSMemoryBarrier()`
-/// come barriera hardware completa (store-release / load-acquire equivalente su ARM64).
+/// Usiamo due indici interi normali (`writeIndex`, `readIndex`) con
+/// `atomic_thread_fence(memory_order_seq_cst)` come barriera hardware completa
+/// (store-release / load-acquire equivalente su ARM64).
 /// Il protocollo è:
 ///   1. Producer: scrive i dati nel buffer di storage.
-///   2. Producer: esegue `OSMemoryBarrier()` (store-release).
+///   2. Producer: esegue `atomic_thread_fence(memory_order_seq_cst)` (store-release).
 ///   3. Producer: aggiorna `writeIndex`.
 ///   4. Consumer: legge `writeIndex`.
-///   5. Consumer: esegue `OSMemoryBarrier()` (load-acquire).
+///   5. Consumer: esegue `atomic_thread_fence(memory_order_seq_cst)` (load-acquire).
 ///   6. Consumer: legge i dati dal buffer di storage.
 ///
 /// Questo schema è corretto per SPSC perché:
 /// - Un solo thread scrive `writeIndex` (producer).
 /// - Un solo thread scrive `readIndex` (consumer).
-/// - `OSMemoryBarrier()` impedisce il riordinamento delle istruzioni da parte del
-///   compilatore e della CPU (su ARM64 corrisponde a `dmb ish`).
+/// - `atomic_thread_fence(memory_order_seq_cst)` impedisce il riordinamento delle
+///   istruzioni da parte del compilatore e della CPU (su ARM64 = `dmb ish`).
 ///
 /// ## Capacità e wrap-around
 ///
@@ -64,7 +65,7 @@ private final class SPSCRingBuffer {
     // readIndex  è scritto solo dal consumer (dspQueue).
     // Entrambi vengono letti dall'altro lato, ma mai scritti contemporaneamente
     // dallo stesso thread, quindi non servono operazioni atomiche CAS —
-    // basta la barriera di memoria (OSMemoryBarrier) per garantire la visibilità.
+    // basta la barriera di memoria (atomic_thread_fence) per garantire la visibilità.
 
     private var writeIndex: Int = 0
     private var readIndex:  Int = 0
@@ -126,7 +127,10 @@ private final class SPSCRingBuffer {
 
         // Barriera store-release: garantisce che i dati siano visibili al consumer
         // prima che writeIndex venga aggiornato.
-        OSMemoryBarrier()
+        // atomic_thread_fence(memory_order_seq_cst) sostituisce OSMemoryBarrier()
+        // (deprecato su iOS 17+) con la barriera sequenzialmente consistente di
+        // <stdatomic.h> (disponibile via Darwin), semantica equivalente su ARM64.
+        atomic_thread_fence(memory_order_seq_cst)
         writeIndex = write + toWrite
     }
 
@@ -142,7 +146,9 @@ private final class SPSCRingBuffer {
     func read(into destination: UnsafeMutablePointer<Float>, count: Int) -> Int {
         // Barriera load-acquire: garantisce che i dati scritti prima dell'aggiornamento
         // di writeIndex siano visibili adesso.
-        OSMemoryBarrier()
+        // atomic_thread_fence(memory_order_seq_cst) sostituisce OSMemoryBarrier()
+        // (deprecato su iOS 17+); equivalente su ARM64 (`dmb ish`).
+        atomic_thread_fence(memory_order_seq_cst)
 
         let write   = writeIndex
         let read    = readIndex
@@ -244,6 +250,10 @@ final class AudioEngine: AudioBufferProvider {
     /// Callback registrato da `startCapture(handler:)` — invocato dalla dspQueue.
     private var captureHandler: ((AVAudioPCMBuffer) -> Void)?
 
+    /// Token degli observer NotificationCenter registrati in `setupNotificationObservers()`.
+    /// Rimossi in `teardownNotificationObservers()` chiamato da `stop()`.
+    private var notificationObservers: [NSObjectProtocol] = []
+
     // TBD-25: Ring buffer SPSC lock-free. Alloca storage nell'init, nessuna alloc
     // nel tap callback. Il producer (tap) scrive; il consumer (dspQueue) drena.
     private let ringBuffer: SPSCRingBuffer
@@ -330,8 +340,9 @@ final class AudioEngine: AudioBufferProvider {
         var mags    = [Float](repeating: 0, count: binCount)
 
         // Calcola la finestra di Hann normalizzata (vDSP_HANN_NORM).
-        // vDSP_hann_window sovrascrive 'hann' direttamente; il flag 0 = periodic
-        // (vs 1 = symmetric). Per analisi FFT si usa la forma periodica.
+        // vDSP_HANN_NORM (= 1) produce la finestra simmetrica normalizzata,
+        // adatta per analisi spettrale (preserva l'energia per la misurazione).
+        // vDSP_HANN_DENORM (= 0) sarebbe la forma periodica non normalizzata.
         vDSP_hann_window(&hann, vDSP_Length(fftSz), Int32(vDSP_HANN_NORM))
 
         self.hannWindow      = hann
@@ -386,21 +397,92 @@ final class AudioEngine: AudioBufferProvider {
             avEngine.inputNode.removeTap(onBus: 0)
             throw AudioEngineError.engineStartFailed
         }
-        Task { @MainActor in
-            self.state?.isListening = true
+        setupNotificationObservers()
+        Task { @MainActor [weak state] in
+            state?.isListening = true
         }
     }
 
     func stop() {
+        teardownNotificationObservers()
         avEngine.inputNode.removeTap(onBus: 0)
         avEngine.stop()
         captureHandler = nil
-        Task { @MainActor in
-            self.state?.isListening = false
+        Task { @MainActor [weak state] in
+            state?.isListening = false
         }
     }
 
     // MARK: - Private
+
+    // MARK: - Notification observers (BL-1)
+
+    /// Registra gli observer per interruzioni AVAudioSession e cambio route.
+    /// Chiamato da `start()` dopo l'avvio dell'engine.
+    private func setupNotificationObservers() {
+        let interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: nil
+        ) { [weak self] notification in
+            self?.handleInterruption(notification)
+        }
+        let routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: nil
+        ) { [weak self] notification in
+            self?.handleRouteChange(notification)
+        }
+        notificationObservers = [interruptionObserver, routeChangeObserver]
+    }
+
+    /// Rimuove tutti gli observer registrati. Chiamato da `stop()`.
+    private func teardownNotificationObservers() {
+        notificationObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        notificationObservers.removeAll()
+    }
+
+    /// Gestisce le interruzioni AVAudioSession (es. chiamata telefonica).
+    private func handleInterruption(_ notification: Notification) {
+        guard let info = notification.userInfo,
+              let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+
+        switch type {
+        case .began:
+            // Interruzione iniziata: aggiorna lo stato ma non rimuove il tap.
+            // L'engine si fermerà automaticamente; lasciamo il tap installato per
+            // poter riprendere senza reinstallarlo alla fine dell'interruzione.
+            Task { @MainActor [weak state] in state?.isListening = false }
+
+        case .ended:
+            guard let optValue = info[AVAudioSessionInterruptionOptionKey] as? UInt,
+                  AVAudioSession.InterruptionOptions(rawValue: optValue).contains(.shouldResume) else {
+                // Il sistema non ha consigliato il resume: ferma la pipeline pulitamente.
+                stop()
+                return
+            }
+            // Resume: riattiva l'engine senza reinstallare il tap.
+            try? avEngine.start()
+            Task { @MainActor [weak state] in state?.isListening = true }
+
+        @unknown default:
+            break
+        }
+    }
+
+    /// Gestisce i cambi di route AVAudioSession (es. cuffie scollegate).
+    private func handleRouteChange(_ notification: Notification) {
+        guard let info = notification.userInfo,
+              let reasonValue = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else { return }
+
+        if reason == .oldDeviceUnavailable {
+            // Dispositivo audio rimosso (es. cuffie scollegate): ferma la pipeline.
+            stop()
+        }
+    }
 
     /// Calcola i coefficienti biquad RBJ per il filtro HP@20Hz e LP@200Hz
     /// alla sample rate effettiva negoziata da AVAudioSession.
@@ -575,13 +657,16 @@ final class AudioEngine: AudioBufferProvider {
             }
 
             // Copia i campioni filtrati nel PCMBuffer wrapper pre-allocato.
-            // `vDSP_mmov` non è disponibile per array 1-D; usiamo `cblas_scopy`
-            // (Accelerate) — zero alloc, loop SIMD-ottimizzato.
-            // In alternativa, memcpy è equivalente per Float32 senza stride.
+            // Usiamo `UnsafeMutablePointer.update(from:count:)` — zero alloc,
+            // equivalente a memcpy per Float32 contigui senza stride.
             channelData[0].update(from: drainBuffer, count: read)
             pcmBuffer.frameLength = AVAudioFrameCount(read)
 
             // ── Output A: consegna buffer PCM filtrato al captureHandler (BeatDetector) ──
+            // CONTRATTO BORROW: il buffer è di proprietà di AudioEngine e viene riutilizzato
+            // al ciclo successivo del while. Il captureHandler deve essere sincrono e
+            // non-retaining: il buffer è valido solo per la durata della chiamata sincrona.
+            // BeatDetector.process(buffer:) deve processare o copiare i dati prima di ritornare.
             handler(pcmBuffer)
 
             // ── Output B: FFT 1024-pt → 46 bande energia → BeatState.energyBands ──────

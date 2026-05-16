@@ -652,7 +652,7 @@ final class AudioEngineTests: XCTestCase {
     // reimplementando localmente la stessa logica di AudioEngine.drainRingBuffer().
     // Questo test non dipende da hardware e copre l'algoritmo FFT in sé.
 
-    func test_fft_standalone_sineSigal_produce46BandsInRange01() {
+    func test_fft_standalone_sineSignal_produce46BandsInRange01() {
         let fftSize = 1024
         let log2n: vDSP_Length = 10
         let binCount = fftSize / 2
