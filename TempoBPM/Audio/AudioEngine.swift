@@ -216,6 +216,18 @@ final class AudioEngine: AudioBufferProvider {
     /// Scegliamo 8192 che è esattamente 4 × 2048 ed è una potenza di 2.
     private static let ringCapacity: Int = 8192
 
+    // TBD-29: FFT parameters
+    /// Numero di campioni per la FFT (deve essere potenza di 2).
+    private static let fftSize: Int = 1024
+    /// log2(fftSize) = 10, richiesto da vDSP_fft_zrip.
+    private static let fftLog2n: vDSP_Length = 10
+    /// Numero di bin reali: fftSize / 2 (simmetria hermitiana della FFT reale).
+    private static let fftBinCount: Int = 512
+    /// Numero di bande energia esposte alla UI via BeatState.energyBands.
+    private static let energyBandCount: Int = 46
+    /// Intervallo minimo tra aggiornamenti di energyBands (~60 ms).
+    private static let energyBandsThrottleInterval: Double = 0.060
+
     // MARK: - Private state
 
     /// BeatState tenuto weak per evitare retain cycle (AudioEngine non deve
@@ -265,6 +277,33 @@ final class AudioEngine: AudioBufferProvider {
     private var hpDelayBuffer: [Float] = [0, 0, 0, 0]
     private var lpDelayBuffer: [Float] = [0, 0, 0, 0]
 
+    // TBD-29: FFT setup e buffer ausiliari — tutti pre-allocati nell'init.
+    // Zero alloc nel loop DSP.
+
+    /// Setup FFT reale in-place creato da vDSP_create_fftsetup. Distrutto nel deinit.
+    private var fftSetup: FFTSetup?
+
+    /// Finestra di Hann pre-calcolata su fftSize campioni (normalizzata vDSP_HANN_NORM).
+    private var hannWindow: [Float]
+
+    /// Buffer di lavoro per applicare la finestra al segnale prima della FFT.
+    /// Dimensione: fftSize. Non condivide spazio con drainBuffer per preservare
+    /// il segnale filtrato già consegnato al captureHandler (Output A).
+    private var fftWorkBuffer: [Float]
+
+    /// Buffer per la parte reale del DSPSplitComplex (fftBinCount = fftSize/2 elementi).
+    private var fftRealBuffer: [Float]
+
+    /// Buffer per la parte immaginaria del DSPSplitComplex (fftBinCount elementi).
+    private var fftImagBuffer: [Float]
+
+    /// Buffer magnitudini quadratiche (output di vDSP_zvmags) — fftBinCount elementi.
+    private var magnitudesBuffer: [Float]
+
+    /// Timestamp dell'ultimo aggiornamento di BeatState.energyBands (CFAbsoluteTime, Double).
+    /// Usato per throttling ~60ms. Zero = mai aggiornato.
+    private var lastEnergyBandsTime: Double = 0
+
     // MARK: - Init
 
     init(state: BeatState) {
@@ -276,12 +315,42 @@ final class AudioEngine: AudioBufferProvider {
             capacity: Int(AudioEngine.tapBufferSize))
         self.drainBuffer.initialize(
             repeating: 0, count: Int(AudioEngine.tapBufferSize))
+
+        // TBD-29: Pre-alloca tutti i buffer FFT e calcola la finestra di Hann.
+        // Questi buffer sono riutilizzati ad ogni chiamata di drainRingBuffer()
+        // senza mai allocare heap nel loop DSP.
+        let binCount = AudioEngine.fftBinCount
+        let fftSz    = AudioEngine.fftSize
+
+        // Alloca e azzera i buffer Float prima di usarli nei setter di proprietà.
+        var hann    = [Float](repeating: 0, count: fftSz)
+        var work    = [Float](repeating: 0, count: fftSz)
+        var realBuf = [Float](repeating: 0, count: binCount)
+        var imagBuf = [Float](repeating: 0, count: binCount)
+        var mags    = [Float](repeating: 0, count: binCount)
+
+        // Calcola la finestra di Hann normalizzata (vDSP_HANN_NORM).
+        // vDSP_hann_window sovrascrive 'hann' direttamente; il flag 0 = periodic
+        // (vs 1 = symmetric). Per analisi FFT si usa la forma periodica.
+        vDSP_hann_window(&hann, vDSP_Length(fftSz), Int32(vDSP_HANN_NORM))
+
+        self.hannWindow      = hann
+        self.fftWorkBuffer   = work
+        self.fftRealBuffer   = realBuf
+        self.fftImagBuffer   = imagBuf
+        self.magnitudesBuffer = mags
+
+        // Crea il setup FFT reale (radix-2). Deve essere creato una volta sola:
+        // è un'operazione costosa che alloca tabelle di twiddle factor interne.
+        self.fftSetup = vDSP_create_fftsetup(AudioEngine.fftLog2n, FFTRadix(kFFTRadix2))
     }
 
     deinit {
         // vDSP_biquad_Setup è un tipo opaco che richiede distruzione esplicita.
         if let setup = hpSetup { vDSP_biquad_DestroySetup(setup) }
         if let setup = lpSetup { vDSP_biquad_DestroySetup(setup) }
+        // TBD-29: distruggi il setup FFT (libera le tabelle di twiddle factor interne).
+        if let setup = fftSetup { vDSP_destroy_fftsetup(setup) }
         // Dealloca il drain buffer pre-allocato.
         drainBuffer.deallocate()
     }
