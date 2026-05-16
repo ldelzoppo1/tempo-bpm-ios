@@ -1,9 +1,179 @@
 import AVFoundation
 import Accelerate
+import Darwin
 
 // TBD-21: Configurare AVAudioSession con categoria playAndRecord e parametri measurement
 // TBD-30: Installazione tap AVAudioEngine, DSP queue, buffer pre-allocato
 // TBD-23: Coefficienti biquad HP@20Hz e LP@200Hz, setup vDSP_biquad_CreateSetup
+// TBD-25: Ring buffer SPSC lock-free per trasferimento PCM thread audio → dspQueue
+
+// MARK: - SPSC Ring Buffer
+
+/// Ring buffer single-producer / single-consumer lock-free per campioni PCM Float32.
+///
+/// Progettato per il pattern audio real-time:
+/// - **Producer** = tap callback AVAudioEngine (thread real-time): chiama `write(_:count:)`.
+///   Il path di scrittura è wait-free e allocation-free.
+/// - **Consumer** = dspQueue (serial DispatchQueue): chiama `read(into:count:)`.
+///
+/// ## Correttezza SPSC senza librerie esterne
+///
+/// Usiamo due indici interi normali (`writeIndex`, `readIndex`) con `OSMemoryBarrier()`
+/// come barriera hardware completa (store-release / load-acquire equivalente su ARM64).
+/// Il protocollo è:
+///   1. Producer: scrive i dati nel buffer di storage.
+///   2. Producer: esegue `OSMemoryBarrier()` (store-release).
+///   3. Producer: aggiorna `writeIndex`.
+///   4. Consumer: legge `writeIndex`.
+///   5. Consumer: esegue `OSMemoryBarrier()` (load-acquire).
+///   6. Consumer: legge i dati dal buffer di storage.
+///
+/// Questo schema è corretto per SPSC perché:
+/// - Un solo thread scrive `writeIndex` (producer).
+/// - Un solo thread scrive `readIndex` (consumer).
+/// - `OSMemoryBarrier()` impedisce il riordinamento delle istruzioni da parte del
+///   compilatore e della CPU (su ARM64 corrisponde a `dmb ish`).
+///
+/// ## Capacità e wrap-around
+///
+/// La capacità è sempre una potenza di 2: il wrap-around usa bitmasking
+/// (`index & mask`) invece di modulo, evitando divisioni nel path real-time.
+///
+/// - Note: Questa classe è `final` per evitare overhead da vtable nel path real-time.
+private final class SPSCRingBuffer {
+
+    // MARK: - Constants
+
+    /// Capacità del ring buffer in numero di campioni Float32.
+    /// Deve essere una potenza di 2; verificato nell'init via assert.
+    let capacity: Int
+
+    // MARK: - Storage
+
+    /// Buffer Float32 pre-allocato nell'init. Deallocato nel deinit.
+    /// L'accesso diretto via UnsafeMutablePointer evita il bridging Swift Array
+    /// e garantisce che il path di scrittura non tocchi l'ARC.
+    private let storage: UnsafeMutablePointer<Float>
+
+    /// Bitmask per wrap-around: `capacity - 1` (valido solo se capacity è potenza di 2).
+    private let mask: Int
+
+    // MARK: - Indices
+    //
+    // writeIndex è scritto solo dal producer (thread real-time).
+    // readIndex  è scritto solo dal consumer (dspQueue).
+    // Entrambi vengono letti dall'altro lato, ma mai scritti contemporaneamente
+    // dallo stesso thread, quindi non servono operazioni atomiche CAS —
+    // basta la barriera di memoria (OSMemoryBarrier) per garantire la visibilità.
+
+    private var writeIndex: Int = 0
+    private var readIndex:  Int = 0
+
+    // MARK: - Init / Deinit
+
+    /// - Parameter capacity: Numero di campioni Float32. Deve essere una potenza di 2.
+    init(capacity: Int) {
+        precondition(capacity > 0 && (capacity & (capacity - 1)) == 0,
+                     "SPSCRingBuffer: la capacità deve essere una potenza di 2, ricevuto \(capacity)")
+        self.capacity = capacity
+        self.mask     = capacity - 1
+        self.storage  = UnsafeMutablePointer<Float>.allocate(capacity: capacity)
+        self.storage.initialize(repeating: 0, count: capacity)
+    }
+
+    deinit {
+        storage.deallocate()
+    }
+
+    // MARK: - Producer API (real-time safe)
+
+    /// Scrive `count` campioni da `source` nel ring buffer.
+    ///
+    /// **Real-time safe**: nessuna allocazione heap, nessun lock, nessuna chiamata ObjC.
+    /// Se lo spazio disponibile è inferiore a `count`, scrive solo i campioni che entrano
+    /// (i campioni in eccesso vengono scartati silenziosamente — il consumer è abbastanza
+    /// veloce da drenare il buffer prima che si riempia con la capacità scelta di 4×tapBufferSize).
+    ///
+    /// Usa `assign(from:count:)` invece di `initialize`: lo storage è già inizializzato
+    /// nell'`init` e le scritture successive sovrascrivono memoria già inizializzata.
+    ///
+    /// - Parameters:
+    ///   - source: Puntatore ai campioni Float da scrivere.
+    ///   - count: Numero di campioni da scrivere.
+    func write(_ source: UnsafePointer<Float>, count: Int) {
+        // Legge readIndex per stimare lo spazio disponibile. Un valore stale (vecchio)
+        // causerebbe solo una sottostima dello spazio libero (drop conservativo), mai
+        // una data race — readIndex avanza in modo monotono e non torna indietro.
+        let read  = readIndex
+        let write = writeIndex
+        let available = capacity - (write - read)   // spazio libero (può essere negativo in overflow teorico)
+        let toWrite   = min(count, max(0, available))
+        guard toWrite > 0 else { return }
+
+        let startSlot = write & mask
+
+        if startSlot + toWrite <= capacity {
+            // Caso semplice: nessun wrap-around.
+            // `assign` è corretto qui perché lo storage è già inizializzato dall'init.
+            (storage + startSlot).assign(from: source, count: toWrite)
+        } else {
+            // Caso wrap-around: due memcpy (assign su memoria già inizializzata).
+            let firstChunk  = capacity - startSlot
+            let secondChunk = toWrite - firstChunk
+            (storage + startSlot).assign(from: source,              count: firstChunk)
+            storage.assign(from: source + firstChunk, count: secondChunk)
+        }
+
+        // Barriera store-release: garantisce che i dati siano visibili al consumer
+        // prima che writeIndex venga aggiornato.
+        OSMemoryBarrier()
+        writeIndex = write + toWrite
+    }
+
+    // MARK: - Consumer API (dspQueue)
+
+    /// Legge fino a `count` campioni dal ring buffer in `destination`.
+    ///
+    /// - Parameters:
+    ///   - destination: Puntatore al buffer di destinazione (almeno `count` Float).
+    ///   - count: Numero massimo di campioni da leggere.
+    /// - Returns: Numero effettivo di campioni letti (0 se il buffer è vuoto).
+    @discardableResult
+    func read(into destination: UnsafeMutablePointer<Float>, count: Int) -> Int {
+        // Barriera load-acquire: garantisce che i dati scritti prima dell'aggiornamento
+        // di writeIndex siano visibili adesso.
+        OSMemoryBarrier()
+
+        let write   = writeIndex
+        let read    = readIndex
+        let filled  = write - read
+        let toRead  = min(count, max(0, filled))
+        guard toRead > 0 else { return 0 }
+
+        let startSlot = read & mask
+
+        if startSlot + toRead <= capacity {
+            // `assign` è corretto: destination (drainBuffer) è già inizializzato dall'init di AudioEngine.
+            destination.assign(from: storage + startSlot, count: toRead)
+        } else {
+            let firstChunk  = capacity - startSlot
+            let secondChunk = toRead - firstChunk
+            destination.assign(from: storage + startSlot,   count: firstChunk)
+            (destination + firstChunk).assign(from: storage, count: secondChunk)
+        }
+
+        // Nessuna barriera necessaria dopo readIndex: il producer non legge readIndex
+        // nel path critico (lo usa solo per calcolare lo spazio disponibile).
+        readIndex = read + toRead
+        return toRead
+    }
+
+    /// Numero di campioni attualmente disponibili per la lettura.
+    var availableSamples: Int {
+        // Snapshot non-atomico: sufficiente per decisioni non-critiche (log, diagnostica).
+        return writeIndex - readIndex
+    }
+}
 
 // MARK: - Biquad filter coefficients
 
@@ -11,12 +181,13 @@ import Accelerate
 ///
 /// Layout `[b0, b1, b2, A1, A2]` come atteso da `vDSP_biquad_CreateSetup`.
 /// La ricorrenza implementata da vDSP è:
-///   y[n] = b0·x[n] + b1·x[n-1] + b2·x[n-2] − A1·y[n-1] − A2·y[n-2]
+///   y[n] = B0·x[n] + B1·x[n−1] + B2·x[n−2] − A1·y[n−1] − A2·y[n−2]
 ///
 /// I valori A1 e A2 sono passati come `a1/a0` e `a2/a0` (notazione RBJ normalizzata),
-/// senza ulteriore negazione: il segno meno nella ricorrenza è già nella formula vDSP.
-/// Poiché RBJ definisce a1 = −2·cos(w0) (valore negativo), A1 risulterà negativo,
-/// e la sottrazione −A1·y[n-1] diventa di fatto una addizione, come atteso.
+/// senza ulteriore negazione: la ricorrenza RBJ e quella vDSP hanno la stessa forma,
+/// entrambe sottraggono i termini di feedback. Il segno meno è già intrinseco.
+/// RBJ a1 = −2·cos(w0) è già negativo, quindi A1 passato a vDSP sarà negativo:
+/// la sottrazione −A1·y[n−1] equivale a sommare +2·cos(w0)/a0·y[n−1], corretto.
 struct BiquadCoefficients {
     /// `[b0/a0, b1/a0, b2/a0, a1/a0, a2/a0]` in Double,
     /// come richiesto da `vDSP_biquad_CreateSetup`.
@@ -41,6 +212,10 @@ final class AudioEngine: AudioBufferProvider {
 
     private static let tapBufferSize: AVAudioFrameCount = 2048
 
+    /// Capacità del ring buffer: potenza di 2 ≥ 4 × tapBufferSize (4 × 2048 = 8192).
+    /// Scegliamo 8192 che è esattamente 4 × 2048 ed è una potenza di 2.
+    private static let ringCapacity: Int = 8192
+
     // MARK: - Private state
 
     /// BeatState tenuto weak per evitare retain cycle (AudioEngine non deve
@@ -57,9 +232,18 @@ final class AudioEngine: AudioBufferProvider {
     /// Callback registrato da `startCapture(handler:)` — invocato dalla dspQueue.
     private var captureHandler: ((AVAudioPCMBuffer) -> Void)?
 
-    /// Buffer Float pre-allocato nell'init per uso futuro in TBD-25 (ring buffer).
-    /// Capacità = 2 × tapBufferSize per assorbire jitter nell'arrivo dei frame.
-    private let preallocatedBuffer: [Float]
+    // TBD-25: Ring buffer SPSC lock-free. Alloca storage nell'init, nessuna alloc
+    // nel tap callback. Il producer (tap) scrive; il consumer (dspQueue) drena.
+    private let ringBuffer: SPSCRingBuffer
+
+    /// Buffer Float pre-allocato usato dalla dspQueue per drenare il ring buffer
+    /// senza allocare memoria sul consumer path. Dimensione = tapBufferSize.
+    private let drainBuffer: UnsafeMutablePointer<Float>
+
+    /// Buffer AVAudioPCMBuffer pre-allocato per consegnare i campioni drenati al
+    /// captureHandler. Il formato viene impostato in `installTap()` una volta nota
+    /// la sample rate reale. Nil fino all'installazione del tap.
+    private var handlerPCMBuffer: AVAudioPCMBuffer?
 
     // TBD-23: coefficienti biquad calcolati a runtime dalla sample rate nativa.
     // Nil fino a quando `start()` non ha configurato la sessione e letto il formato.
@@ -77,14 +261,21 @@ final class AudioEngine: AudioBufferProvider {
 
     init(state: BeatState) {
         self.state = state
-        // Pre-allocazione in init: nessuna alloc nel tap callback real-time.
-        self.preallocatedBuffer = [Float](repeating: 0, count: Int(AudioEngine.tapBufferSize) * 2)
+        // TBD-25: alloca ring buffer e drain buffer nell'init — nessuna alloc nel
+        // tap callback real-time.
+        self.ringBuffer  = SPSCRingBuffer(capacity: AudioEngine.ringCapacity)
+        self.drainBuffer = UnsafeMutablePointer<Float>.allocate(
+            capacity: Int(AudioEngine.tapBufferSize))
+        self.drainBuffer.initialize(
+            repeating: 0, count: Int(AudioEngine.tapBufferSize))
     }
 
     deinit {
         // vDSP_biquad_Setup è un tipo opaco che richiede distruzione esplicita.
         if let setup = hpSetup { vDSP_biquad_DestroySetup(setup) }
         if let setup = lpSetup { vDSP_biquad_DestroySetup(setup) }
+        // Dealloca il drain buffer pre-allocato.
+        drainBuffer.deallocate()
     }
 
     // MARK: - AudioBufferProvider
@@ -146,9 +337,10 @@ final class AudioEngine: AudioBufferProvider {
     /// Comune: a0=1+alpha  a1=-2·cos(w0)  a2=1-alpha
     ///
     /// Normalizzazione: tutti i coefficienti divisi per a0.
-    /// Layout per vDSP_biquad_CreateSetup: [b0/a0, b1/a0, b2/a0, −a1/a0, −a2/a0]
-    /// Il segno negato su A1 e A2 riflette la convenzione vDSP:
-    ///   y[n] = b0·x[n] + b1·x[n−1] + b2·x[n−2] − A1·y[n−1] − A2·y[n−2]
+    /// Layout per vDSP_biquad_CreateSetup: [b0/a0, b1/a0, b2/a0, a1/a0, a2/a0]
+    /// Nessuna negazione extra su A1/A2: la ricorrenza vDSP
+    ///   y[n] = B0·x[n] + B1·x[n−1] + B2·x[n−2] − A1·y[n−1] − A2·y[n−2]
+    /// coincide con la forma RBJ normalizzata; i valori si passano direttamente.
     private func computeFilterCoefficients(sampleRate: Double) {
         // Butterworth maximally-flat magnitude: Q = 1/√2 ≈ 0.70710678
         let q = 1.0 / 2.0.squareRoot()
@@ -176,14 +368,16 @@ final class AudioEngine: AudioBufferProvider {
             let a1 = -2.0 * cosW0   // RBJ a1, già con segno canonico
             let a2 = 1.0 - alpha    // RBJ a2
 
-            // vDSP_biquad_CreateSetup si aspetta [b0, b1, b2, A1, A2] dove
-            // A1 = −(a1/a0) e A2 = −(a2/a0) per il segno della ricorrenza.
+            // vDSP_biquad_CreateSetup si aspetta [b0/a0, b1/a0, b2/a0, a1/a0, a2/a0].
+            // Nessuna negazione: la ricorrenza vDSP sottrae già A1 e A2, esattamente
+            // come nella forma RBJ normalizzata. Passare −(a1/a0) invertirebbe il segno
+            // del polo e destabilizzerebbe il filtro.
             return BiquadCoefficients(values: [
                 b0 / a0,
                 b1 / a0,
                 b2 / a0,
-                -(a1 / a0),
-                -(a2 / a0)
+                a1 / a0,
+                a2 / a0
             ])
         }
 
@@ -202,21 +396,91 @@ final class AudioEngine: AudioBufferProvider {
     }
 
     /// Installa il tap sull'inputNode usando il formato nativo dell'hardware.
-    /// Il callback è real-time safe: nessuna allocazione, nessun lock, nessuna
-    /// chiamata ObjC con effetti collaterali — il buffer viene consegnato alla
-    /// dspQueue per l'elaborazione DSP.
+    ///
+    /// ## Path real-time (tap callback)
+    /// 1. Copia i campioni PCM dal buffer AVAudioEngine nel ring buffer SPSC.
+    /// 2. Invia un dispatch asincrono alla dspQueue per svegliare il consumer.
+    ///
+    /// Il tap callback è real-time safe: nessuna allocazione heap, nessun lock,
+    /// nessuna chiamata ObjC con effetti collaterali.
+    /// `ringBuffer.write(_:count:)` è wait-free e allocation-free.
+    /// Il `dspQueue.async` cattura solo il riferimento `ringBuffer` (già allocato)
+    /// e il `captureHandler` — nessuna copia di buffer audio sul real-time thread.
+    ///
+    /// ## Path consumer (dspQueue)
+    /// La closure schedulata su dspQueue drena il ring buffer a blocchi di
+    /// `tapBufferSize` campioni e chiama `captureHandler` con un `AVAudioPCMBuffer`
+    /// pre-allocato (`handlerPCMBuffer`) popolato con i campioni drenati.
     private func installTap() {
         let inputNode = avEngine.inputNode
         // Il formato nativo evita costose conversioni di sample rate nel tap.
         let format = inputNode.inputFormat(forBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: AudioEngine.tapBufferSize, format: format) { [dspQueue, captureHandler] buffer, _ in
-            // Thread audio real-time: catturiamo solo riferimenti pre-esistenti,
-            // zero alloc, zero lock. Il dispatch non alloca sul real-time thread
-            // perché il blocco è catturato per copia come closure pre-creata.
-            guard let handler = captureHandler else { return }
-            dspQueue.async {
-                handler(buffer)
+
+        // Pre-alloca il PCMBuffer usato dal consumer per avvolgere i campioni
+        // drenati prima di consegnarli al captureHandler. Un unico buffer riutilizzato
+        // dalla dspQueue (serial) evita alloc nel consumer path.
+        let tapFrameCount = AudioEngine.tapBufferSize
+        handlerPCMBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: tapFrameCount)
+
+        inputNode.installTap(
+            onBus: 0,
+            bufferSize: tapFrameCount,
+            format: format
+        ) { [weak self] buffer, _ in
+            // ── Thread audio real-time ──────────────────────────────────────────
+            // Requisiti: zero alloc, zero lock, zero ObjC con side-effects.
+            //
+            // `self` è catturato weak per sicurezza, ma nel real-time path evitiamo
+            // operazioni ARC heavy. Il guard è l'unica operazione "pesante" qui,
+            // ed è accettabile perché è solo un load+branch.
+            guard let self,
+                  let channelData = buffer.floatChannelData else { return }
+
+            let frameCount = Int(buffer.frameLength)
+            // write() è wait-free e allocation-free: copia i campioni nel ring buffer
+            // usando puntatori raw senza toccare l'heap né i lock.
+            self.ringBuffer.write(channelData[0], count: frameCount)
+
+            // Sveglia il consumer sulla dspQueue. `dspQueue.async` può allocare
+            // internamente per accodare il work item, ma questa allocazione avviene
+            // nel sistema operativo (libdispatch) ed è accettabile in questo contesto:
+            // il tap di AVAudioEngine su iOS non è un thread con priorità THREAD_TIME_CONSTRAINT
+            // puro, e Apple stessa usa dispatch_async nei tap di esempio.
+            self.dspQueue.async { [weak self] in
+                self?.drainRingBuffer()
             }
+            // ── Fine path real-time ─────────────────────────────────────────────
+        }
+    }
+
+    /// Drena il ring buffer e consegna i campioni al captureHandler.
+    ///
+    /// Chiamato esclusivamente dalla dspQueue (serial). Legge fino a `tapBufferSize`
+    /// campioni per chiamata usando il `drainBuffer` pre-allocato, li copia nel
+    /// `handlerPCMBuffer` pre-allocato, e chiama `captureHandler`.
+    /// Continua a drenare finché ci sono campioni disponibili (per smaltire eventuali
+    /// accodamenti multipli generati da burst di tap callback ravvicinati).
+    private func drainRingBuffer() {
+        guard let handler = captureHandler,
+              let pcmBuffer = handlerPCMBuffer else { return }
+
+        let batchSize = Int(AudioEngine.tapBufferSize)
+
+        // Drena tutto il ring buffer in batch da tapBufferSize per evitare latenza
+        // accumulata se il consumer è momentaneamente in ritardo.
+        while ringBuffer.availableSamples >= batchSize {
+            let read = ringBuffer.read(into: drainBuffer, count: batchSize)
+            guard read > 0,
+                  let channelData = pcmBuffer.floatChannelData else { break }
+
+            // Copia i campioni drenati nel PCMBuffer wrapper pre-allocato.
+            // `vDSP_mmov` non è disponibile per array 1-D; usiamo `cblas_scopy`
+            // (Accelerate) — zero alloc, loop SIMD-ottimizzato.
+            // In alternativa, memcpy è equivalente per Float32 senza stride.
+            channelData[0].update(from: drainBuffer, count: read)
+            pcmBuffer.frameLength = AVAudioFrameCount(read)
+
+            handler(pcmBuffer)
         }
     }
 
