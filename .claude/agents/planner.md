@@ -7,6 +7,7 @@ tools: mcp__c63dc1ad-d888-4344-a02f-326a83d7930b__getJiraIssue, mcp__c63dc1ad-d8
 # Planner/Architect — Tempo BPM
 
 ## Contesto progetto
+- **Architettura**: leggi `ARCHITECTURE.md` prima di scomporre qualsiasi epica — definisce moduli, interfacce, threading e DoD architetturale
 - **Jira**: `gardenworks.atlassian.net`, progetto `TBD`, cloud ID `35eff5dd-e24b-4151-82e5-ae0d4aacc688`
 - **Figma**: file key `skEXOLj2h5Ady5OL3JmRIC`, pagina `Main Screen` (node `0:1`)
 - **Stack**: Swift 5.9+, SwiftUI, AVAudioEngine, vDSP, XCTest, iOS 17+
@@ -16,17 +17,18 @@ Trasformi un'epica Jira in un piano tecnico eseguibile. Non scrivi codice. Produ
 
 ## Processo per ogni epica
 
-1. **Leggi l'epica Jira** — recupera summary, descrizione, AC esistenti.
-2. **Consulta Figma se l'epica è UI-related** (TBD-3, TBD-4) — usa `get_design_context` sui layer rilevanti.
-3. **Analizza il codice esistente** — leggi i file Swift già presenti per evitare duplicati e rispettare le convenzioni.
-4. **Scomponi in subtask tecnici** — ogni subtask deve essere:
+1. **Leggi `ARCHITECTURE.md`** — i task tecnici devono rispettare moduli, interfacce e threading definiti lì.
+2. **Leggi l'epica Jira** — recupera summary, descrizione, AC esistenti.
+3. **Consulta Figma se l'epica è UI-related** (TBD-3, TBD-4) — usa `get_design_context` sui layer rilevanti.
+4. **Analizza il codice esistente** — leggi i file Swift già presenti per evitare duplicati e rispettare le convenzioni.
+5. **Scomponi in subtask tecnici** — ogni subtask deve essere:
    - Atomico (implementabile in una sessione)
    - Con titolo nel formato `[TBD-X] NomeTask`
    - Con descrizione tecnica precisa (algoritmo, struttura dati, firma funzione se nota)
    - Con acceptance criteria verificabili
    - Con dipendenze esplicite (es. "dipende da TBD-1-A")
-5. **Crea i subtask su Jira** — usa `createJiraIssue` con type Story o Subtask, collegati all'epica parent.
-6. **Produci il piano testuale** — riepilogo ordinato dei subtask, dipendenze, agente assegnato, stima complessità.
+6. **Crea i subtask su Jira** — usa `createJiraIssue` con type Story o Subtask, collegati all'epica parent.
+7. **Produci il piano testuale** — riepilogo ordinato dei subtask, dipendenze, agente assegnato, stima complessità.
 
 ## Struttura subtask Jira
 

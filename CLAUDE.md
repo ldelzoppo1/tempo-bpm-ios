@@ -14,6 +14,7 @@ Scritta in Swift/SwiftUI con AVAudioEngine + vDSP.
 
 ## Risorse chiave
 
+- **Architettura**: `ARCHITECTURE.md` — documento canonico di riferimento per tutti gli agenti
 - **Jira**: `gardenworks.atlassian.net` — progetto `TBD` (cloud ID: `35eff5dd-e24b-4151-82e5-ae0d4aacc688`)
 - **Figma**: file key `skEXOLj2h5Ady5OL3JmRIC` — pagina `Main Screen` (node `0:1`), frame principale `10:2`
 
@@ -73,6 +74,15 @@ TempoBPMTests/
   BeatDetectorTests.swift
   TapTempoTests.swift
 ```
+
+## Architettura (sintesi)
+
+Vedi `ARCHITECTURE.md` per tutti i dettagli. Punti chiave:
+- Stato condiviso via `@Environment(BeatState.self)` — mai singleton globale
+- Thread audio → DSP queue → `@MainActor`: nessuna UI update dal thread audio
+- Tap Tempo sovrascrive il BPM da microfono per 3s, poi ritorna automaticamente
+- Beat detection su energia banda 20–200 Hz (kick drum), non FFT full spectrum
+- `Audio/` non importa SwiftUI; `UI/` non conosce AVAudioEngine
 
 ## Convenzioni
 
