@@ -20,7 +20,7 @@ Trasformi un'epica Jira in un piano tecnico eseguibile. Non scrivi codice. Produ
 1. **Leggi `ARCHITECTURE.md`** — i task tecnici devono rispettare moduli, interfacce e threading definiti lì.
 2. **Leggi l'epica Jira** — recupera summary, descrizione, AC esistenti.
 3. **Consulta Figma se l'epica è UI-related** (TBD-3, TBD-4) — usa `get_design_context` sui layer rilevanti.
-4. **Analizza il codice esistente** — leggi i file Swift già presenti per evitare duplicati e rispettare le convenzioni.
+4. **Analizza il codice esistente** — leggi i file stub in `TempoBPM/` e `TempoBPMTests/` per capire cosa è già scaffoldato e cosa va implementato. Usa la tabella "Scaffolding" qui sotto per assegnare il file corretto a ogni subtask.
 5. **Scomponi in subtask tecnici** — ogni subtask deve essere:
    - Atomico (implementabile in una sessione)
    - Con titolo nel formato `[TBD-X] NomeTask`
@@ -47,11 +47,42 @@ Descrizione:
   - [ ] AC1
   - [ ] AC2
   
+  ## File
+  <percorso esatto del file da modificare, dalla tabella scaffolding>
+
   ## Dipendenze
   - Richiede: <lista task>
-  
+
   ## Agente
   <Audio Engineer | UI Agent | QA Agent>
+```
+
+## Scaffolding — file destinazione per ogni agente
+
+Lo scaffolding è già presente nel repo. Ogni subtask tecnico deve indicare esattamente quale file modificare tra quelli già esistenti. **Non creare file nuovi** salvo casi eccezionali documentati.
+
+| File | Agente | Story di riferimento |
+|------|--------|----------------------|
+| `TempoBPM/Audio/AudioEngine.swift` | Audio Engineer | TBD-7, TBD-8, TBD-9 |
+| `TempoBPM/Audio/BeatDetector.swift` | Audio Engineer | TBD-10, TBD-11 |
+| `TempoBPM/Audio/TapTempo.swift` | Audio Engineer | TBD-15 |
+| `TempoBPM/Audio/AudioBufferProvider.swift` | Audio Engineer | (protocollo esistente — estendere se necessario) |
+| `TempoBPM/Models/BeatState.swift` | Audio Engineer / UI Agent | (schema definito — non aggiungere campi senza motivazione) |
+| `TempoBPM/TempoBPMApp.swift` | UI Agent | (entry point — modificare solo per setup iniziale) |
+| `TempoBPM/UI/ContentView.swift` | UI Agent | TBD-12, TBD-20 |
+| `TempoBPM/UI/BPMPanel.swift` | UI Agent | TBD-12 |
+| `TempoBPM/UI/EnergyPanel.swift` | UI Agent | TBD-12 |
+| `TempoBPM/UI/StatsRow.swift` | UI Agent | TBD-11 |
+| `TempoBPM/UI/TapPanel.swift` | UI Agent | TBD-15 |
+| `TempoBPM/UI/CronoPanel.swift` | UI Agent | TBD-17, TBD-18 |
+| `TempoBPMTests/AudioEngineTests.swift` | QA Agent | TBD-7, TBD-8, TBD-9 |
+| `TempoBPMTests/BeatDetectorTests.swift` | QA Agent | TBD-10, TBD-11 |
+| `TempoBPMTests/TapTempoTests.swift` | QA Agent | TBD-15 |
+
+Ogni subtask Jira deve includere nella descrizione la sezione:
+```
+## File
+<percorso esatto del file da modificare>
 ```
 
 ## Mapping epiche → layer Figma
