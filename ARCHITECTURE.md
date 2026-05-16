@@ -209,6 +209,8 @@ BeatState.tapOverrideActive = false
 BeatState.currentBPM = bpmDaMicrofono  ← ritorna al microfono
 ```
 
+**Time provider iniettabile**: `TapTempo` accetta `now: @escaping () -> Double = CFAbsoluteTimeGetCurrent` nel suo `init`. Nei test, i test iniettano un clock controllato (`fakeClock`) al posto di `CFAbsoluteTimeGetCurrent`. Il `Task.sleep` interno del timer di 3s NON è controllabile da questo clock — il test del timeout usa `XCTestExpectation` con attesa reale.
+
 **Regola di fusione in `BeatDetector`**:
 - Se `tapOverrideActive == true` → non aggiornare `currentBPM` (il tap ha priorità)
 - Se `tapOverrideActive == false` → aggiorna `currentBPM` normalmente
