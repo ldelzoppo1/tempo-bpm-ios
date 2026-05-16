@@ -19,20 +19,31 @@ struct TempoBPMApp: App {
         WindowGroup {
             ContentView()
                 .environment(beatState)
-                .onAppear {
-                    // Collegare BeatDetector come captureHandler di AudioEngine,
-                    // poi avviare la pipeline audio su un thread non-main per evitare
-                    // il blocco del main thread durante la richiesta permesso microfono.
+                // TBD-47: osserva isListening e gestisce la pipeline audio.
+                // ContentView scrive solo beatState.isListening; TempoBPMApp
+                // traduce il cambiamento in startCapture/stopCapture, mantenendo
+                // la separazione Audio/UI definita in ARCHITECTURE.md.
+                .onChange(of: beatState.isListening) { _, newValue in
                     let detector = beatDetector
-                    Task.detached(priority: .userInitiated) {
-                        do {
-                            try audioEngine.startCapture { [weak detector] buffer in
-                                detector?.process(buffer: buffer)
+                    if newValue {
+                        Task.detached(priority: .userInitiated) {
+                            do {
+                                try audioEngine.startCapture { [weak detector] buffer in
+                                    detector?.process(buffer: buffer)
+                                }
+                            } catch {
+                                // Permesso negato o hardware error: AudioEngine.start()
+                                // non ha impostato isListening = true, quindi il pulsante
+                                // rimane in stato AVVIA. Reset esplicito per sicurezza.
+                                await MainActor.run { self.beatState.isListening = false }
                             }
-                        } catch {
-                            // La UI mostra isListening=false (default) in caso di errore.
                         }
+                    } else {
+                        audioEngine.stopCapture()
+                        beatDetector.reset()
                     }
+                    // Mantiene lo schermo acceso mentre l'ascolto è attivo.
+                    UIApplication.shared.isIdleTimerDisabled = newValue
                 }
         }
     }

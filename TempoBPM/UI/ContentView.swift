@@ -48,8 +48,9 @@ struct ContentView: View {
                 // 6. CronoPanel placeholder (TBD-4)
                 CronoPanel()
 
-                // 7. TBD-47: pulsante FERMA/AVVIA
-                Spacer(minLength: 0)
+                // 7. Pulsante FERMA / AVVIA (TBD-47)
+                StartButton()
+                    .padding(.top, 4)
             }
             .padding(.horizontal, 20)
             .padding(.top, 52)
@@ -105,9 +106,51 @@ private struct HeaderView: View {
     }
 }
 
+// MARK: - StartButton
+
+/// Pulsante principale FERMA / AVVIA (TBD-47).
+/// Scrive solo beatState.isListening — la pipeline audio viene avviata/fermata
+/// da TempoBPMApp tramite .onChange(of: beatState.isListening).
+private struct StartButton: View {
+    @Environment(BeatState.self) private var beatState
+
+    var body: some View {
+        Button {
+            beatState.isListening.toggle()
+        } label: {
+            Text(beatState.isListening ? "FERMA" : "AVVIA")
+                .font(.system(size: 16, weight: .semibold))
+                .tracking(2)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .foregroundStyle(
+                    beatState.isListening ? Color.cvAccentRed : Color.cvAccentGreen
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(
+                            beatState.isListening
+                                ? Color.cvAccentRed
+                                : Color.cvAccentGreen,
+                            lineWidth: 2
+                        )
+                )
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(
+                            beatState.isListening
+                                ? Color.cvAccentRed.opacity(0.06)
+                                : Color.cvAccentGreen.opacity(0.06)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 // MARK: - Preview
 
-#Preview("In ascolto — BPM attivo") {
+#Preview("In ascolto — FERMA") {
     let state = BeatState()
     state.isListening = true
     state.currentBPM = 127
@@ -124,7 +167,7 @@ private struct HeaderView: View {
         .environment(state)
 }
 
-#Preview("In pausa — nessun beat") {
+#Preview("In pausa — AVVIA") {
     let state = BeatState()
     state.isListening = false
     state.currentBPM = 0
