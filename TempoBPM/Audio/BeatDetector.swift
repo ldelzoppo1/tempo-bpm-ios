@@ -54,10 +54,17 @@ final class BeatDetector {
     /// Tutti i BPM validi rilevati nella sessione corrente.
     private var allBPMs: [Double] = []
 
+    // MARK: - Private: time provider
+
+    /// Restituisce il timestamp corrente in secondi assoluti.
+    /// Iniettabile per i test (evita Thread.sleep nei test di timing).
+    private let now: () -> Double
+
     // MARK: - Init
 
-    init(state: BeatState) {
+    init(state: BeatState, now: @escaping () -> Double = CFAbsoluteTimeGetCurrent) {
         self.state = state
+        self.now = now
     }
 
     // MARK: - Testability
@@ -90,15 +97,6 @@ final class BeatDetector {
                               + BeatDetector.adaptiveAlpha * rms
         }
 
-        // TBD-42 — Silence detection: se non c'è nessun onset da > 2s, pubblica stability=0.
-        // Non viene resettato lo stato — il reset avviene solo su chiamata esplicita a reset().
-        let now = CFAbsoluteTimeGetCurrent()
-        if now - lastOnsetTime > 2.0 && lastOnsetTime > 0 {
-            Task { @MainActor [weak state] in
-                state?.stability = 0
-            }
-        }
-
         // TBD-37 Step 3: Guard warm-up — attendi che la soglia sia significativa.
         guard adaptiveThreshold > 0.001 else { return }
 
@@ -106,10 +104,11 @@ final class BeatDetector {
         guard rms > adaptiveThreshold * BeatDetector.onsetMultiplier else { return }
 
         // TBD-37 Step 5–6: Guard refrattario — previene doppi onset ravvicinati.
-        guard now - lastOnsetTime >= refractoryPeriod else { return }
+        let currentTime = now()
+        guard currentTime - lastOnsetTime >= refractoryPeriod else { return }
 
         // TBD-37 Step 7: Onset rilevato — registra.
-        registerOnset(at: now)
+        registerOnset(at: currentTime)
     }
 
     /// Azzera lo stato interno della sessione.
@@ -140,6 +139,14 @@ final class BeatDetector {
     /// TBD-38: calcola l'inter-onset interval, lo valida nel range 40–220 BPM,
     /// mantiene la rolling window degli ultimi bpmWindowSize intervals.
     private func registerOnset(at time: Double) {
+        // TBD-42 — Silence detection: se l'intervallo supera 2s, l'energia ritmica è
+        // cambiata radicalmente. Reset della rolling window per evitare BPM errati.
+        if lastOnsetTime > 0 && time - lastOnsetTime > 2.0 {
+            onsetIntervals.removeAll()
+            allBPMs.removeAll()
+            Task { @MainActor [weak state] in state?.stability = 0 }
+        }
+
         if lastOnsetTime > 0 {
             let interval = time - lastOnsetTime
             let bpm = 60.0 / interval
@@ -204,7 +211,7 @@ final class BeatDetector {
     private func publishBeatState(currentBPM: Double) {
         // Cattura copie dei valori calcolati sulla DSP queue prima del salto al MainActor.
         let bpmSnapshot = currentBPM
-        let recentSnapshot = Array(allBPMs.suffix(20))
+        let recentSnapshot = Array(allBPMs.suffix(BeatDetector.bpmWindowSize))
         let minBPM = allBPMs.min() ?? 0
         let maxBPM = allBPMs.max() ?? 0
         let avgBPM = allBPMs.isEmpty ? 0 : allBPMs.reduce(0, +) / Double(allBPMs.count)

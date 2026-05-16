@@ -2,10 +2,9 @@ import SwiftUI
 
 @main
 struct TempoBPMApp: App {
-    @State private var beatState = BeatState()
-
-    // BeatDetector è tenuto in vita come proprietà dell'App struct per tutta la durata
-    // dell'applicazione. Viene inizializzato con il beatState condiviso.
+    // Un'unica istanza di BeatState condivisa tra UI (via @Environment) e pipeline audio.
+    // Tutti e tre gli oggetti sono inizializzati in init() con la stessa istanza `state`.
+    @State private var beatState: BeatState
     private let audioEngine: AudioEngine
     private let beatDetector: BeatDetector
 
