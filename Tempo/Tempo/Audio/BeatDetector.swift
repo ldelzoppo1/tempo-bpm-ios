@@ -35,7 +35,9 @@ final class BeatDetector: @unchecked Sendable {
     private nonisolated static var energyWindowSize: Int { 22 }
 
     /// Onset se rms > media + std × onsetSigma.
-    private nonisolated static var onsetSigma: Float { 1.0 }
+    /// 0.7 bilancia sensibilità e falsi positivi: più aggressivo di 1.0 (media+1σ)
+    /// ma ancora robusto grazie al kick gate che filtra rullante e hi-hat.
+    private nonisolated static var onsetSigma: Float { 0.7 }
 
     /// Periodo refrattario minimo tra due onset (300 ms → max 200 BPM).
     private nonisolated static var refractorySeconds: Double { 0.300 }
@@ -57,8 +59,10 @@ final class BeatDetector: @unchecked Sendable {
 
     /// Frazione minima di energia che deve stare sotto kickCutoffHz perché l'onset
     /// sia classificato come grancassa (e non rullante/altro).
-    /// 0.40 = almeno il 40% dell'energia totale (30–250 Hz) deve essere < 100 Hz.
-    private nonisolated static var kickRatioThreshold: Float { 0.40 }
+    /// 0.28 = almeno il 28% dell'energia totale (30–250 Hz) deve essere < 100 Hz.
+    /// Valori attesi: cassa 0.50–0.70, rullante 0.05–0.20. Soglia 0.28 garantisce
+    /// margine contro le casse con meno low-end senza lasciare passare il rullante.
+    private nonisolated static var kickRatioThreshold: Float { 0.28 }
 
     // MARK: Private state
     // nonisolated(unsafe): tutto acceduto dalla sola DSP queue (serial), concorrenza
