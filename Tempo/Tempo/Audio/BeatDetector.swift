@@ -1,5 +1,10 @@
 import AVFoundation
 import Accelerate
+import os.log
+
+#if DEBUG
+private let bdLog = Logger(subsystem: "com.ldelzoppo.tempo", category: "BeatDetector")
+#endif
 
 // MARK: - BeatDetector
 
@@ -155,12 +160,20 @@ final class BeatDetector: @unchecked Sendable {
         let kickRMS   = kickBandRMS(samples: ch[0], count: Int(n),
                                     sampleRate: buffer.format.sampleRate)
         let kickRatio = rms > 0 ? kickRMS / rms : 0
-        guard kickRatio >= BeatDetector.kickRatioThreshold else { return }
+        guard kickRatio >= BeatDetector.kickRatioThreshold else {
+            #if DEBUG
+            bdLog.debug("⛔ rejected  kickRatio=\(kickRatio, format: .fixed(precision: 2))  rms=\(rms, format: .fixed(precision: 4))")
+            #endif
+            return
+        }
 
         // Step 5 — Refrattario.
         let t = now()
         guard t - lastOnsetTime >= BeatDetector.refractorySeconds else { return }
 
+        #if DEBUG
+        bdLog.debug("✅ onset      kickRatio=\(kickRatio, format: .fixed(precision: 2))  rms=\(rms, format: .fixed(precision: 4))  threshold=\(threshold, format: .fixed(precision: 4))")
+        #endif
         registerOnset(at: t)
     }
 
@@ -233,6 +246,9 @@ final class BeatDetector: @unchecked Sendable {
         sessionBPMs.append(bpm)
         if sessionBPMs.count > BeatDetector.sessionBPMCap { sessionBPMs.removeFirst() }
 
+        #if DEBUG
+        bdLog.debug("🥁 bpm=\(bpm, format: .fixed(precision: 1))  interval=\(interval, format: .fixed(precision: 3))s  window=\(self.onsetIntervals.count)")
+        #endif
         publishBeatState(currentBPM: bpm, recentBPMs: recentBPMs)
     }
 
