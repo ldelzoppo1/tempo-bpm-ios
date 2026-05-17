@@ -2,6 +2,11 @@ import AVFoundation
 import Accelerate
 import Darwin
 
+#if DEBUG
+import OSLog
+private let aeLogger = Logger(subsystem: "com.ldelzoppo.tempo", category: "AudioEngine")
+#endif
+
 // TBD-21: Configurare AVAudioSession con categoria playAndRecord e parametri measurement
 // TBD-30: Installazione tap AVAudioEngine, DSP queue, buffer pre-allocato
 // TBD-23: Coefficienti biquad HP@20Hz e LP@200Hz, setup vDSP_biquad_CreateSetup
@@ -760,6 +765,9 @@ final class AudioEngine: AudioBufferProvider {
             let midBassE = magnitudesBuffer[2] + magnitudesBuffer[3] + magnitudesBuffer[4]
             let totalBassE = subBassE + midBassE
             let kickRatioLocal: Float = totalBassE > 1e-6 ? subBassE / totalBassE : 0
+            #if DEBUG
+            aeLogger.debug("📊 kickRatio=\(kickRatioLocal, format: .fixed(precision: 2)) sub=\(subBassE, format: .fixed(precision: 4)) mid=\(midBassE, format: .fixed(precision: 4))")
+            #endif
 
             // Step 6 — Normalizza magnitudini in [0, 1] rispetto al massimo del frame.
             var maxMag: Float = 0

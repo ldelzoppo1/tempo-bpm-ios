@@ -2,6 +2,11 @@ import AVFoundation
 import Accelerate
 import CoreFoundation
 
+#if DEBUG
+import OSLog
+private let bdLogger = Logger(subsystem: "com.ldelzoppo.tempo", category: "BeatDetector")
+#endif
+
 // TBD-37: RMS Extraction e Onset Detection
 // TBD-38: Soglia Adattiva EMA e Rolling Window BPM
 // TBD-39: Pubblicazione BeatState via @MainActor
@@ -136,6 +141,9 @@ final class BeatDetector {
         if ioiHistory.count >= 2, let s = state {
             let ratio = s.kickRatio
             if ratio > 0 && ratio < BeatDetector.kickRatioMinimum {
+                #if DEBUG
+                bdLogger.debug("⛔ onset rejected — kickRatio \(ratio, format: .fixed(precision: 2)) < \(BeatDetector.kickRatioMinimum, format: .fixed(precision: 2))")
+                #endif
                 return
             }
         }
@@ -194,6 +202,9 @@ final class BeatDetector {
             let bpm = 60.0 / interval
 
             if bpm >= BeatDetector.bpmMin && bpm <= BeatDetector.bpmMax {
+                #if DEBUG
+                bdLogger.debug("✅ onset t=\(time, format: .fixed(precision: 3)) interval=\(interval, format: .fixed(precision: 3))s bpm=\(bpm, format: .fixed(precision: 1))")
+                #endif
                 // Aggiorna rolling window intervals (ultimi bpmWindowSize).
                 onsetIntervals.append(interval)
                 if onsetIntervals.count > BeatDetector.bpmWindowSize {
@@ -300,6 +311,15 @@ final class BeatDetector {
             }
             state.confidenceState = newConfidence
             state.ioiDeviation = ioiCV
+            #if DEBUG
+            let stateSymbol: String
+            switch newConfidence {
+            case .locked:   stateSymbol = "🔒 LOCKED"
+            case .tracking: stateSymbol = "🟡 TRACKING"
+            case .lost:     stateSymbol = "🔴 LOST — frozen at \(String(format: "%.1f", state.frozenBPM)) BPM"
+            }
+            bdLogger.debug("\(stateSymbol) — ioiCV=\(ioiCV * 100, format: .fixed(precision: 1))%")
+            #endif
 
             // Congela BPM se LOST (fill/tom burst): mantieni l'ultimo valore valido
             if newConfidence == .lost {
