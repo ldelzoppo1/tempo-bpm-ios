@@ -49,6 +49,17 @@ final class BeatDetector: @unchecked Sendable {
     /// Numero di intervalli nella finestra BPM (media mobile).
     private nonisolated static var bpmWindowSize: Int { 4 }
 
+    // MARK: Kick discrimination constants
+
+    /// Cutoff del filtro LP per isolare la banda della grancassa (< kickCutoffHz).
+    /// La cassa ha il fondamentale a 40–100 Hz; il rullante domina sopra i 100 Hz.
+    private nonisolated static var kickCutoffHz: Double { 100.0 }
+
+    /// Frazione minima di energia che deve stare sotto kickCutoffHz perché l'onset
+    /// sia classificato come grancassa (e non rullante/altro).
+    /// 0.40 = almeno il 40% dell'energia totale (30–250 Hz) deve essere < 100 Hz.
+    private nonisolated static var kickRatioThreshold: Float { 0.40 }
+
     // MARK: Private state
     // nonisolated(unsafe): tutto acceduto dalla sola DSP queue (serial), concorrenza
     // manuale garantita dall'uso esclusivo da un singolo DispatchQueue consumer.
@@ -74,6 +85,12 @@ final class BeatDetector: @unchecked Sendable {
     // Task che azzera il BPM dopo 3 s di silenzio; cancellato ad ogni nuovo beat.
     nonisolated(unsafe) private var beatResetTask: Task<Void, Never>?
 
+    // Kick discrimination — filtro LP aggiuntivo a kickCutoffHz.
+    // Pre-allocato in init; zero allocazioni nel DSP loop.
+    nonisolated(unsafe) private var kickLPSetup: vDSP_biquad_Setup?
+    nonisolated(unsafe) private var kickLPDelay: [Float] = [0, 0, 0, 0]   // 2*sections+2
+    nonisolated(unsafe) private var kickWorkBuffer: [Float]                // scratch buffer
+
     // MARK: Init
 
     /// - Parameters:
@@ -81,9 +98,14 @@ final class BeatDetector: @unchecked Sendable {
     ///   - now: Provider di timestamp iniettabile (default: CFAbsoluteTimeGetCurrent).
     ///     Nei test sostituire con un clock controllato.
     init(state: BeatState, now: @escaping () -> Double = CFAbsoluteTimeGetCurrent) {
-        self.state = state
-        self.now   = now
-        energyWindow = [Float](repeating: 0, count: BeatDetector.energyWindowSize)
+        self.state      = state
+        self.now        = now
+        energyWindow    = [Float](repeating: 0, count: BeatDetector.energyWindowSize)
+        kickWorkBuffer  = [Float](repeating: 0, count: 4096)
+    }
+
+    deinit {
+        if let lp = kickLPSetup { vDSP_biquad_DestroySetup(lp) }
     }
 
     // MARK: Testability
@@ -124,6 +146,13 @@ final class BeatDetector: @unchecked Sendable {
         // Step 4 — Onset detection.
         guard rms > threshold, threshold > 0.001 else { return }
 
+        // Step 4b — Kick discrimination: verifica che l'energia sia concentrata
+        // sotto kickCutoffHz (= grancassa) e non nella banda del rullante (100–250 Hz).
+        let kickRMS   = kickBandRMS(samples: ch[0], count: Int(n),
+                                    sampleRate: buffer.format.sampleRate)
+        let kickRatio = rms > 0 ? kickRMS / rms : 0
+        guard kickRatio >= BeatDetector.kickRatioThreshold else { return }
+
         // Step 5 — Refrattario.
         let t = now()
         guard t - lastOnsetTime >= BeatDetector.refractorySeconds else { return }
@@ -143,6 +172,7 @@ final class BeatDetector: @unchecked Sendable {
         lastOnsetTime = 0
         beatResetTask?.cancel()
         beatResetTask = nil
+        kickLPDelay = [0, 0, 0, 0]
         Task { @MainActor [weak state] in
             guard let state else { return }
             state.currentBPM = 0
@@ -203,6 +233,42 @@ final class BeatDetector: @unchecked Sendable {
     }
 
     // MARK: Private — DSP helpers
+
+    /// Filtra i campioni con un biquad LP a kickCutoffHz e restituisce il loro RMS.
+    ///
+    /// Il filtro viene inizializzato al primo invocation (sample-rate noto solo a runtime).
+    /// L'inizializzazione è un'unica allocazione fuori dal loop stazionario.
+    nonisolated private func kickBandRMS(samples: UnsafePointer<Float>,
+                                          count: Int,
+                                          sampleRate: Double) -> Float {
+        if kickLPSetup == nil {
+            let fc    = BeatDetector.kickCutoffHz
+            let q     = 1.0 / 2.0.squareRoot()          // Butterworth
+            let w0    = 2.0 * .pi * fc / sampleRate
+            let cosW  = cos(w0)
+            let alpha = sin(w0) / (2.0 * q)
+            let a0    = 1.0 + alpha
+            let coeffs: [Double] = [
+                (1.0 - cosW) / 2.0 / a0,   // b0/a0
+                (1.0 - cosW)       / a0,    // b1/a0
+                (1.0 - cosW) / 2.0 / a0,   // b2/a0
+                -2.0 * cosW        / a0,    // a1/a0
+                (1.0 - alpha)      / a0     // a2/a0
+            ]
+            kickLPSetup = vDSP_biquad_CreateSetup(coeffs, 1)
+        }
+        guard let lp = kickLPSetup, count <= kickWorkBuffer.count else { return 0 }
+        kickWorkBuffer.withUnsafeMutableBufferPointer { buf in
+            guard let p = buf.baseAddress else { return }
+            vDSP_biquad(lp, &kickLPDelay, samples, 1, p, 1, vDSP_Length(count))
+        }
+        var rms: Float = 0
+        kickWorkBuffer.withUnsafeBufferPointer { buf in
+            guard let p = buf.baseAddress else { return }
+            vDSP_rmsqv(p, 1, &rms, vDSP_Length(count))
+        }
+        return rms
+    }
 
     /// Calcola media e deviazione standard dell'energia nella finestra scorrevole.
     /// Opera sui soli `energyWindowCount` campioni riempiti.
