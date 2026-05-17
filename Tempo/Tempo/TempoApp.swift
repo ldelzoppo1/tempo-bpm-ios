@@ -4,24 +4,19 @@ import SwiftUI
 struct TempoApp: App {
 
     @State private var beatState = BeatState()
-
-    // Tenuti in @State per sopravvivere ai re-render del body.
     @State private var audioEngine: AudioEngine?
     @State private var beatDetector: BeatDetector?
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(onToggle: toggleAudioPipeline)
                 .environment(beatState)
                 .task { startAudioPipeline() }
         }
     }
 
-    /// Crea AudioEngine + BeatDetector e avvia la cattura audio su un thread non-main.
-    ///
-    /// `startCapture` usa un semaforo per attendere il permesso microfono:
-    /// deve girare fuori dal main thread per evitare deadlock.
     private func startAudioPipeline() {
+        guard audioEngine == nil else { return }
         let engine   = AudioEngine(state: beatState)
         let detector = BeatDetector(state: beatState)
         audioEngine   = engine
@@ -31,6 +26,21 @@ struct TempoApp: App {
             try? engine.startCapture { buffer in
                 detector.process(buffer: buffer)
             }
+        }
+    }
+
+    private func stopAudioPipeline() {
+        audioEngine?.stopCapture()
+        beatDetector?.reset()
+        audioEngine  = nil
+        beatDetector = nil
+    }
+
+    private func toggleAudioPipeline() {
+        if beatState.isListening {
+            stopAudioPipeline()
+        } else {
+            startAudioPipeline()
         }
     }
 }
