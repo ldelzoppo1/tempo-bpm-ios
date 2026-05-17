@@ -8,12 +8,14 @@ struct TempoBPMApp: App {
     private let audioEngine: AudioEngine
     private let beatDetector: BeatDetector
     private let tapTempo: TapTempo
+    private let tempoPredictor: TempoPredictor
 
     init() {
         let state = BeatState()
         _beatState = State(initialValue: state)
         audioEngine = AudioEngine(state: state)
-        beatDetector = BeatDetector(state: state)
+        tempoPredictor = TempoPredictor(state: state)
+        beatDetector = BeatDetector(state: state, tempoPredictor: tempoPredictor)
         tapTempo = TapTempo(state: state)
     }
 
@@ -44,6 +46,7 @@ struct TempoBPMApp: App {
                         audioEngine.stopCapture()
                         beatDetector.reset()
                         tapTempo.reset()
+                        tempoPredictor.reset()
                     }
                     // Mantiene lo schermo acceso mentre l'ascolto è attivo.
                     UIApplication.shared.isIdleTimerDisabled = newValue

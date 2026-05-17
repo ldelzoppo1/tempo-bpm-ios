@@ -753,6 +753,14 @@ final class AudioEngine: AudioBufferProvider {
                 }
             }
 
+            // KickSignatureDetector: rapporto sub-bass vs mid-bass
+            // Bin 1 ≈ 43 Hz (sub-bass), Bin 2-4 ≈ 86-172 Hz (mid-bass)
+            // Kick autentico ha dominanza sub-bass (ratio > 0.5); tom ha più energia mid-bass
+            let subBassE = magnitudesBuffer[1]
+            let midBassE = magnitudesBuffer[2] + magnitudesBuffer[3] + magnitudesBuffer[4]
+            let totalBassE = subBassE + midBassE
+            let kickRatioLocal: Float = totalBassE > 1e-6 ? subBassE / totalBassE : 0
+
             // Step 6 — Normalizza magnitudini in [0, 1] rispetto al massimo del frame.
             var maxMag: Float = 0
             vDSP_maxv(&magnitudesBuffer, 1, &maxMag, vDSP_Length(AudioEngine.energyBandCount))
@@ -780,6 +788,12 @@ final class AudioEngine: AudioBufferProvider {
             let bands = Array(magnitudesBuffer.prefix(AudioEngine.energyBandCount))
             Task { @MainActor [weak state] in
                 state?.energyBands = bands
+            }
+
+            // Pubblica kick ratio su BeatState (throttled insieme a energyBands)
+            let kr = kickRatioLocal
+            Task { @MainActor [weak state] in
+                state?.kickRatio = kr
             }
         }
     }
