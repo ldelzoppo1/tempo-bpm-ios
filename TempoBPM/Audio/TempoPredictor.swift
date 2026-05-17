@@ -1,5 +1,10 @@
 import Foundation
 
+#if DEBUG
+import OSLog
+private let tpLogger = Logger(subsystem: "com.ldelzoppo.tempo", category: "TempoPredictor")
+#endif
+
 /// Predice il timing del prossimo beat una volta che il BPM è stabile per
 /// almeno `requiredStableBeats` beat consecutivi (default: 4).
 ///
@@ -42,6 +47,16 @@ final class TempoPredictor {
         let expectedTime = lastOnsetTime + predictedInterval
         let tolerance = predictedInterval * TempoPredictor.toleranceRatio
         let inWindow = abs(time - expectedTime) <= tolerance
+
+        #if DEBUG
+        if predictedInterval > 0 {
+            if inWindow {
+                tpLogger.debug("🎯 in-window — expected=\(expectedTime, format: .fixed(precision: 3)) ±\(tolerance, format: .fixed(precision: 3))s")
+            } else {
+                tpLogger.debug("🎲 out-of-window — fill? expected=\(expectedTime, format: .fixed(precision: 3)) got=\(time, format: .fixed(precision: 3))")
+            }
+        }
+        #endif
 
         if inWindow {
             stableCount = min(stableCount + 1, TempoPredictor.requiredStableBeats + 2)
