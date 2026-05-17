@@ -1,5 +1,11 @@
 import Foundation
 
+enum ConfidenceState {
+    case locked    // ioiDeviation < 10%
+    case tracking  // ioiDeviation 10–20%
+    case lost      // ioiDeviation > 20% o fill/pausa
+}
+
 enum TimeSignatureOption: Int, CaseIterable, Identifiable {
     case three = 3
     case four  = 4
@@ -36,4 +42,15 @@ final class BeatState {
 
     // Scritto da BeatDetector (Audio layer) — la UI legge, non scrive mai
     var currentBeat: Int = 0
+
+    // Scritto da AudioEngine (spectral analysis)
+    var kickRatio: Float = 0         // energia sub-bass / totale-bass [0-1]; kick autentico > 0.5
+
+    // Scritto da BeatDetector
+    var confidenceState: ConfidenceState = .lost
+    var ioiDeviation: Double = 0     // coefficiente di variazione IOI [0-1]
+    var frozenBPM: Double = 0        // ultimo BPM valido prima del freeze
+
+    // Scritto da TempoPredictor
+    var predictedNextBeatTime: Double = 0  // CFAbsoluteTime del prossimo beat atteso
 }

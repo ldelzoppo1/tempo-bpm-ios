@@ -34,6 +34,19 @@ final class BeatDetector {
     /// Periodo refrattario minimo in secondi tra due onset consecutivi (anti-bounce).
     static let refractoryMs: Double = 200
 
+    /// Finestra IOI per il freeze BPM — più ampia di bpmWindowSize per catturare fill.
+    static let ioiWindowSize: Int = 8
+
+    /// Soglia deviazione per TRACKING (coefficiente di variazione).
+    static let ioiTrackingThreshold: Double = 0.10
+
+    /// Soglia deviazione per LOST (congela BPM).
+    static let ioiLostThreshold: Double = 0.20
+
+    /// Soglia kickRatio minima: onset accettato solo se kickRatio > questa soglia.
+    /// 0 = disabilitato finché non c'è storia sufficiente.
+    static let kickRatioMinimum: Float = 0.35
+
     // MARK: - Private state
 
     /// BeatState condiviso — weak per evitare retain cycle.
@@ -54,17 +67,27 @@ final class BeatDetector {
     /// Tutti i BPM validi rilevati nella sessione corrente.
     private var allBPMs: [Double] = []
 
+    /// Rolling window degli ultimi ioiWindowSize inter-onset intervals per IOI locking.
+    private var ioiHistory: [Double] = []
+
+    /// BPM frozen quando lo stato è .lost — non sovrascrive BeatState.currentBPM.
+    private var frozenBPM: Double = 0
+
     // MARK: - Private: time provider
 
     /// Restituisce il timestamp corrente in secondi assoluti.
     /// Iniettabile per i test (evita Thread.sleep nei test di timing).
     private let now: () -> Double
 
+    /// Predice il timing del prossimo beat e valida gli onset nella finestra temporale.
+    private var tempoPredictor: TempoPredictor?
+
     // MARK: - Init
 
-    init(state: BeatState, now: @escaping () -> Double = CFAbsoluteTimeGetCurrent) {
+    init(state: BeatState, now: @escaping () -> Double = CFAbsoluteTimeGetCurrent, tempoPredictor: TempoPredictor? = nil) {
         self.state = state
         self.now = now
+        self.tempoPredictor = tempoPredictor
     }
 
     // MARK: - Testability
@@ -107,6 +130,16 @@ final class BeatDetector {
         let currentTime = now()
         guard currentTime - lastOnsetTime >= refractoryPeriod else { return }
 
+        // KickSignatureDetector: filtra onset non-kick (tom, rullante, ecc.)
+        // Applica il filtro solo quando il ratio è stato inizializzato (> 0).
+        // Disabilita il filtro durante il warmup (ioiHistory.count < 2) per non perdere i primi beat.
+        if ioiHistory.count >= 2, let s = state {
+            let ratio = s.kickRatio
+            if ratio > 0 && ratio < BeatDetector.kickRatioMinimum {
+                return
+            }
+        }
+
         // TBD-37 Step 7: Onset rilevato — registra.
         registerOnset(at: currentTime)
     }
@@ -120,6 +153,9 @@ final class BeatDetector {
         lastOnsetTime = 0
         onsetIntervals = []
         allBPMs = []
+        ioiHistory = []
+        frozenBPM = 0
+        tempoPredictor?.reset()
         Task { @MainActor [weak state] in
             guard let state else { return }
             state.currentBPM = 0
@@ -130,6 +166,11 @@ final class BeatDetector {
             state.stability = 0
             state.beatFlash = false
             state.currentBeat = 0
+            state.confidenceState = .lost
+            state.ioiDeviation = 0
+            state.frozenBPM = 0
+            state.kickRatio = 0
+            state.predictedNextBeatTime = 0
         }
     }
 
@@ -162,11 +203,25 @@ final class BeatDetector {
                 // Accumula tutti i BPM validi della sessione.
                 allBPMs.append(bpm)
 
+                // IOI locking: aggiorna rolling window a 8 intervalli
+                ioiHistory.append(interval)
+                if ioiHistory.count > BeatDetector.ioiWindowSize {
+                    ioiHistory.removeFirst()
+                }
+
+                // Calcola coefficiente di variazione IOI
+                let ioiCV = computeIOIDeviation()
+
                 // Calcola BPM corrente come media degli intervalli nella rolling window.
                 let currentBPM = computeCurrentBPM()
 
                 // TBD-39: Pubblica su BeatState sul @MainActor.
-                publishBeatState(currentBPM: currentBPM)
+                publishBeatState(currentBPM: currentBPM, ioiCV: ioiCV)
+
+                // Aggiorna TempoPredictor con il nuovo onset
+                let meanInterval = onsetIntervals.isEmpty ? interval :
+                    onsetIntervals.reduce(0, +) / Double(onsetIntervals.count)
+                tempoPredictor?.register(onsetTime: time, meanInterval: meanInterval)
             }
         }
 
@@ -205,11 +260,22 @@ final class BeatDetector {
         return max(0.0, 1.0 - (stdDev / mean) * 5.0)
     }
 
+    private func computeIOIDeviation() -> Double {
+        guard ioiHistory.count >= 2 else { return 0 }
+        let count = Double(ioiHistory.count)
+        let mean = ioiHistory.reduce(0, +) / count
+        guard mean > 0 else { return 0 }
+        let variance = ioiHistory.reduce(0.0) { acc, x in
+            let d = x - mean; return acc + d * d
+        } / count
+        return variance.squareRoot() / mean  // Coefficient of Variation
+    }
+
     /// Pubblica i valori aggiornati su BeatState via @MainActor.
     ///
     /// Non aggiorna se tapOverrideActive è true (tap tempo ha priorità su currentBPM).
     /// Il beatFlash viene riportato a false dopo 100ms.
-    private func publishBeatState(currentBPM: Double) {
+    private func publishBeatState(currentBPM: Double, ioiCV: Double) {
         // Cattura copie dei valori calcolati sulla DSP queue prima del salto al MainActor.
         let bpmSnapshot = currentBPM
         let recentSnapshot = Array(allBPMs.suffix(BeatDetector.bpmWindowSize))
@@ -221,7 +287,33 @@ final class BeatDetector {
         Task { @MainActor [weak state] in
             guard let state else { return }
             guard !state.tapOverrideActive else { return }
-            state.currentBPM = bpmSnapshot
+
+            // IOI Locking: determina confidence state e congela BPM se necessario
+            let newConfidence: ConfidenceState
+            switch ioiCV {
+            case ..<BeatDetector.ioiTrackingThreshold:
+                newConfidence = .locked
+            case ..<BeatDetector.ioiLostThreshold:
+                newConfidence = .tracking
+            default:
+                newConfidence = .lost
+            }
+            state.confidenceState = newConfidence
+            state.ioiDeviation = ioiCV
+
+            // Congela BPM se LOST (fill/tom burst): mantieni l'ultimo valore valido
+            if newConfidence == .lost {
+                // Mostra il BPM congelato ma non aggiornare currentBPM
+                if state.frozenBPM > 0 {
+                    // BPM già congelato: non fare nulla su currentBPM
+                }
+                // Non fare return: aggiorniamo comunque recentBPMs/stats per trasparenza
+            } else {
+                // LOCKED o TRACKING: aggiorna currentBPM e aggiorna frozenBPM
+                state.currentBPM = bpmSnapshot
+                state.frozenBPM = bpmSnapshot
+            }
+
             state.recentBPMs = recentSnapshot
             state.minBPM = minBPM
             state.maxBPM = maxBPM
