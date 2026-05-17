@@ -32,9 +32,9 @@ private final class SPSCRingBuffer {
 
     // nonisolated(unsafe): all stored properties accessed from nonisolated real-time
     // threads; manual concurrency contract = single producer / single consumer.
-    nonisolated(unsafe) let capacity: Int
+    let capacity: Int
     nonisolated(unsafe) private let storage: UnsafeMutablePointer<Float>
-    nonisolated(unsafe) private let mask: Int
+    private let mask: Int
     nonisolated(unsafe) private var writeIndex: Int = 0
     nonisolated(unsafe) private var readIndex:  Int = 0
 
@@ -114,7 +114,7 @@ private final class SPSCRingBuffer {
 ///
 /// - Important: Call `start()` / `startCapture(handler:)` from a non-main thread
 ///   to avoid deadlocking the semaphore used for the microphone permission prompt.
-final class AudioEngine: AudioBufferProvider {
+final class AudioEngine: AudioBufferProvider, @unchecked Sendable {
 
     // MARK: DSP constants
     // Declared as nonisolated static computed properties so they are accessible
@@ -424,8 +424,8 @@ final class AudioEngine: AudioBufferProvider {
     /// Requests microphone permission synchronously via semaphore.
     /// Blocks until the system dialog is dismissed — must not be called from main thread.
     nonisolated private func requestMicrophonePermission() throws {
-        let session = AVAudioSession.sharedInstance()
-        switch session.recordPermission {
+        let app = AVAudioApplication.shared
+        switch app.recordPermission {
         case .granted:
             return
         case .denied:
@@ -433,7 +433,7 @@ final class AudioEngine: AudioBufferProvider {
         case .undetermined:
             let sem = DispatchSemaphore(value: 0)
             var ok = false
-            session.requestRecordPermission { result in ok = result; sem.signal() }
+            AVAudioApplication.requestRecordPermission { result in ok = result; sem.signal() }
             sem.wait()
             if !ok { throw AudioEngineError.microphonePermissionDenied }
         @unknown default:
@@ -444,7 +444,7 @@ final class AudioEngine: AudioBufferProvider {
     nonisolated private func configureAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .measurement,
-                                options: [.mixWithOthers, .allowBluetooth])
+                                options: [.mixWithOthers, .allowBluetoothHFP])
         try session.setPreferredSampleRate(44100)
         try session.setPreferredIOBufferDuration(0.005)  // ≈ 5 ms latency
         try session.setActive(true)
