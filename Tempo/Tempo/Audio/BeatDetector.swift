@@ -76,6 +76,15 @@ final class BeatDetector: @unchecked Sendable {
     /// 0.040 blocca transienti ambientali senza escludere i colpi più soft.
     private nonisolated static var minimumOnsetRms: Float { 0.040 }
 
+    // MARK: Live mode constants
+
+    /// Soglia flux: onset se flux > media + std × liveFluxSigma.
+    /// Più alta di onsetSigma perché il flux (derivata) è più rumoroso dell'energia assoluta.
+    /// Il mic iPhone filtra già i sub-bass sotto ~120 Hz: non occorre un LP aggiuntivo.
+    /// Usiamo il segnale 30–250 Hz già pre-filtrato da AudioEngine e rileviamo le salite
+    /// di energia (transients) invece dei livelli assoluti — robusto a mix compressi.
+    private nonisolated static var liveFluxSigma: Float { 1.5 }
+
     // MARK: Kick classification constants (solo DEBUG)
 
     #if DEBUG
@@ -111,6 +120,15 @@ final class BeatDetector: @unchecked Sendable {
     // Task che azzera il BPM dopo 3 s di silenzio; cancellato ad ogni nuovo beat.
     nonisolated(unsafe) private var beatResetTask: Task<Void, Never>?
 
+    // Modalità corrente — sincronizzata da TempoApp via setMode(_:).
+    nonisolated(unsafe) private var currentMode: DetectionMode = .solo
+
+    // Live mode — flux window (nessun filtro aggiuntivo: usa lo stesso RMS di Solo).
+    nonisolated(unsafe) private var prevRMS: Float = 0
+    nonisolated(unsafe) private var fluxWindow: [Float]
+    nonisolated(unsafe) private var fluxWindowHead: Int = 0
+    nonisolated(unsafe) private var fluxWindowCount: Int = 0
+
     // Kick classification — filtro LP a 100 Hz per il log 🥁/🪘 (solo DEBUG).
     #if DEBUG
     nonisolated(unsafe) private var kickLPSetup: vDSP_biquad_Setup?
@@ -128,6 +146,7 @@ final class BeatDetector: @unchecked Sendable {
         self.state   = state
         self.now     = now
         energyWindow = [Float](repeating: 0, count: BeatDetector.energyWindowSize)
+        fluxWindow   = [Float](repeating: 0, count: BeatDetector.energyWindowSize)
     }
 
     deinit {
@@ -140,54 +159,57 @@ final class BeatDetector: @unchecked Sendable {
 
     /// Espone la soglia adattiva corrente (media + σ × onsetSigma) per i test.
     nonisolated var currentThreshold: Float {
-        let (mean, std) = computeEnergyStats()
+        let (mean, std) = computeStats(window: energyWindow, count: energyWindowCount)
         return mean + std * BeatDetector.onsetSigma
     }
 
     // MARK: Public interface
+
+    /// Cambia modalità di rilevamento e azzera lo stato Live-specifico.
+    nonisolated func setMode(_ mode: DetectionMode) {
+        currentMode     = mode
+        prevRMS         = 0
+        fluxWindow      = [Float](repeating: 0, count: BeatDetector.energyWindowSize)
+        fluxWindowHead  = 0
+        fluxWindowCount = 0
+    }
 
     /// Processa un buffer PCM pre-filtrato (HP@30 Hz + LP@250 Hz).
     ///
     /// Chiamato sincrono dalla DSP queue di AudioEngine (borrow semantics):
     /// non trattenere `buffer` oltre il ritorno.
     nonisolated func process(buffer: AVAudioPCMBuffer) {
+        switch currentMode {
+        case .solo: processSolo(buffer: buffer)
+        case .live: processLive(buffer: buffer)
+        }
+    }
+
+    // MARK: Solo mode — onset detection su energia RMS full-spectrum
+
+    nonisolated private func processSolo(buffer: AVAudioPCMBuffer) {
         guard let ch = buffer.floatChannelData else { return }
         let n = vDSP_Length(buffer.frameLength)
         guard n > 0 else { return }
 
-        // Step 1 — RMS del buffer corrente.
         var rms: Float = 0
         vDSP_rmsqv(ch[0], 1, &rms, n)
 
-        // Step 2 — Aggiorna la finestra scorrevole di energia (circular buffer).
-        // Il window viene aggiornato anche per buffer molto silenziosi, così il
-        // warm-up procede normalmente e la soglia adattiva si calibra sul noise floor.
         energyWindow[energyWindowHead] = rms
         energyWindowHead = (energyWindowHead + 1) % BeatDetector.energyWindowSize
         if energyWindowCount < BeatDetector.energyWindowSize { energyWindowCount += 1 }
 
-        // Guard minimo assoluto: blocca rumore ambientale e burst post-riavvio audio.
-        // Impedisce che la finestra si popoli con intervalli fasulli che poi rigettano
-        // come outlier tutti i kick veri.
         guard rms > BeatDetector.minimumOnsetRms else { return }
-
-        // Warm-up: servono almeno 3 campioni per una soglia significativa.
         guard energyWindowCount >= 3 else { return }
 
-        // Step 3 — Soglia = media + std della finestra energia.
-        let (mean, std) = computeEnergyStats()
+        let (mean, std) = computeStats(window: energyWindow, count: energyWindowCount)
         let threshold = mean + std * BeatDetector.onsetSigma
-
-        // Step 4 — Onset detection.
         guard rms > threshold, threshold > 0.001 else { return }
 
-        // Step 5 — Refrattario.
         let t = now()
         let elapsed = t - lastOnsetTime
         guard elapsed >= BeatDetector.refractorySeconds else { return }
 
-        // Step 5b — Holddown anti-risonanza: sopprime le code di decadimento
-        // che superano il refrattario ma sono molto più deboli del colpo originale.
         if elapsed < BeatDetector.holddownSeconds,
            lastOnsetRms > 0,
            rms < lastOnsetRms * BeatDetector.resonanceHolddownRatio {
@@ -207,6 +229,50 @@ final class BeatDetector: @unchecked Sendable {
         registerOnset(at: t)
     }
 
+    // MARK: Live mode — energy flux su segnale 30–250 Hz (già filtrato da AudioEngine)
+
+    nonisolated private func processLive(buffer: AVAudioPCMBuffer) {
+        guard let ch = buffer.floatChannelData else { return }
+        let n = vDSP_Length(buffer.frameLength)
+        guard n > 0 else { return }
+
+        var rms: Float = 0
+        vDSP_rmsqv(ch[0], 1, &rms, n)
+
+        // Derivata positiva dell'energia: rileva le salite brusche (transienti).
+        // Robusto a mix compressi perché non dipende dal livello assoluto ma dal cambio.
+        // Il mic iPhone agisce già come HP naturale sotto ~120 Hz: nessun LP aggiuntivo serve.
+        let flux = max(0, rms - prevRMS)
+        prevRMS = rms
+
+        fluxWindow[fluxWindowHead] = flux
+        fluxWindowHead = (fluxWindowHead + 1) % BeatDetector.energyWindowSize
+        if fluxWindowCount < BeatDetector.energyWindowSize { fluxWindowCount += 1 }
+
+        guard rms > BeatDetector.minimumOnsetRms else { return }
+        guard fluxWindowCount >= 3 else { return }
+
+        let (fluxMean, fluxStd) = computeStats(window: fluxWindow, count: fluxWindowCount)
+        let fluxThreshold = fluxMean + fluxStd * BeatDetector.liveFluxSigma
+        guard flux > fluxThreshold, fluxThreshold > 0 else { return }
+
+        let t = now()
+        let elapsed = t - lastOnsetTime
+        guard elapsed >= BeatDetector.refractorySeconds else { return }
+
+        if elapsed < BeatDetector.holddownSeconds,
+           lastOnsetRms > 0,
+           rms < lastOnsetRms * BeatDetector.resonanceHolddownRatio {
+            return
+        }
+
+        lastOnsetRms = rms
+        #if DEBUG
+        bdLog.debug("🎵 live flux=\(flux, format: .fixed(precision: 4))  rms=\(rms, format: .fixed(precision: 4))  thr=\(fluxThreshold, format: .fixed(precision: 4))  elapsed=\(elapsed, format: .fixed(precision: 3))s")
+        #endif
+        registerOnset(at: t)
+    }
+
     /// Azzera lo stato interno e pubblica il reset su BeatState.
     ///
     /// Chiamare solo dopo `AudioEngine.stop()`.
@@ -220,6 +286,10 @@ final class BeatDetector: @unchecked Sendable {
         lastOnsetRms  = 0
         beatResetTask?.cancel()
         beatResetTask = nil
+        prevRMS         = 0
+        fluxWindow      = [Float](repeating: 0, count: BeatDetector.energyWindowSize)
+        fluxWindowHead  = 0
+        fluxWindowCount = 0
         #if DEBUG
         kickLPDelay = [0, 0, 0, 0]
         #endif
@@ -293,20 +363,18 @@ final class BeatDetector: @unchecked Sendable {
 
     // MARK: Private — DSP helpers
 
-    /// Calcola media e deviazione standard dell'energia nella finestra scorrevole.
-    /// Opera sui soli `energyWindowCount` campioni riempiti.
-    nonisolated private func computeEnergyStats() -> (mean: Float, std: Float) {
-        guard energyWindowCount > 0 else { return (0, 0) }
-
+    /// Calcola media e deviazione standard di un circular buffer (primi `count` slot).
+    nonisolated private func computeStats(window: [Float], count: Int) -> (mean: Float, std: Float) {
+        guard count > 0 else { return (0, 0) }
         var sum: Float = 0
         var sumSq: Float = 0
-        for i in 0..<energyWindowCount {
-            let v = energyWindow[i]
+        for i in 0..<count {
+            let v = window[i]
             sum   += v
             sumSq += v * v
         }
-        let n    = Float(energyWindowCount)
-        let mean = sum / n
+        let n        = Float(count)
+        let mean     = sum / n
         let variance = max(0, sumSq / n - mean * mean)
         return (mean, variance.squareRoot())
     }

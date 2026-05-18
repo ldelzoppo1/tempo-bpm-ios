@@ -1,5 +1,9 @@
 import Foundation
 
+enum DetectionMode: Sendable, Equatable {
+    case solo, live
+}
+
 @Observable
 final class BeatState {
     // Written by BeatDetector/TapTempo, read by UI
@@ -22,4 +26,7 @@ final class BeatState {
     // Written by CronoPanel (UI)
     var concertElapsed: TimeInterval = 0
     var concertRunning: Bool = false
+
+    // Detection mode — switched by ModePanel
+    var detectionMode: DetectionMode = .solo
 }

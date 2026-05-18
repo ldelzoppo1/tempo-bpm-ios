@@ -13,6 +13,7 @@ struct ContentView: View {
                     BPMPanel()
                     EnergyPanel()
                     StatsRow()
+                    ModePanel()
                     TapPanel()
                     CronoPanel()
                     toggleButton
@@ -26,7 +27,7 @@ struct ContentView: View {
 
     private var header: some View {
         HStack {
-            Text("TEMPO")
+            Text("KICKLINE")
                 .font(.system(size: 26))
                 .foregroundStyle(Color.tempoAccent)
             Spacer()

@@ -12,6 +12,9 @@ struct TempoApp: App {
             ContentView(onToggle: toggleAudioPipeline)
                 .environment(beatState)
                 .task { startAudioPipeline() }
+                .onChange(of: beatState.detectionMode) { _, mode in
+                    beatDetector?.setMode(mode)
+                }
         }
     }
 
