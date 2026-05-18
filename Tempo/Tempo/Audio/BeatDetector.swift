@@ -11,22 +11,25 @@ private let bdLog = Logger(subsystem: "com.ldelzoppo.tempo", category: "BeatDete
 /// Rileva i beat da un buffer PCM pre-filtrato (banda 30–250 Hz) e pubblica il BPM
 /// su BeatState via @MainActor.
 ///
-/// ## Algoritmo (TBD-10 / TBD-11)
+/// ## Algoritmo
 ///
-/// **Onset detection (TBD-10)**
+/// **Onset detection**
 /// 1. RMS corrente del buffer PCM.
 /// 2. Soglia dinamica = media + deviazione standard dell'energia in finestra
 ///    scorrevole di ~1 secondo (~22 buffer a 44100/2048 Hz).
 /// 3. Onset se `rms > soglia`.
 /// 4. Refrattario: minimo 300 ms tra onset (max 200 BPM).
-/// 5. Intervallo massimo: 2000 ms — intervalli più lunghi indicano pausa.
-/// 6. Outlier rejection: nuovo intervallo scartato se devia > ±40 % dalla
+/// 5. Holddown anti-risonanza: entro 450 ms dall'ultimo onset, il nuovo onset
+///    viene accettato solo se la sua energia ≥ 35 % di quella precedente.
+///    Previene la doppia rilevazione della coda di decadimento della cassa.
+/// 6. Intervallo massimo: 2000 ms — intervalli più lunghi indicano pausa.
+/// 7. Outlier rejection: nuovo intervallo scartato se devia > ±40 % dalla
 ///    mediana degli ultimi 4 intervalli validi.
 ///
-/// **Calcolo BPM (TBD-11)**
+/// **Calcolo BPM**
 /// - Media degli ultimi 4 intervalli validi → BPM con 1 decimale.
 /// - Aggiornamento ad ogni beat, non su timer.
-/// - `recentBPMs`: 4 BPM individuali (da ogni singolo intervallo) per le pills UI.
+/// - `recentBPMs`: 4 BPM individuali per le pills UI.
 /// - Reset automatico a 0 dopo 3 s senza beat rilevati.
 ///
 /// ## Threading
@@ -40,12 +43,23 @@ final class BeatDetector: @unchecked Sendable {
     private nonisolated static var energyWindowSize: Int { 22 }
 
     /// Onset se rms > media + std × onsetSigma.
-    /// 0.7 bilancia sensibilità e falsi positivi: più aggressivo di 1.0 (media+1σ)
-    /// ma ancora robusto grazie al kick gate che filtra rullante e hi-hat.
-    private nonisolated static var onsetSigma: Float { 0.7 }
+    private nonisolated static var onsetSigma: Float { 1.0 }
 
-    /// Periodo refrattario minimo tra due onset (300 ms → max 200 BPM).
-    private nonisolated static var refractorySeconds: Double { 0.300 }
+    /// Periodo refrattario minimo tra due onset (400 ms → max 150 BPM).
+    /// 400 ms previene il lock su coppie di hit ravvicinate (es. kick + colpo sincopato
+    /// a ~395 ms) che falserebbero il BPM rilevato.
+    private nonisolated static var refractorySeconds: Double { 0.400 }
+
+    /// Finestra holddown anti-risonanza: dopo un onset, un nuovo onset viene
+    /// accettato entro questa finestra solo se la sua energia ≥
+    /// resonanceHolddownRatio × energia dell'ultimo onset.
+    private nonisolated static var holddownSeconds: Double { 0.450 }
+
+    /// Frazione minima di energia rispetto all'ultimo onset per onset nella
+    /// holddown window. Le risonanze della cassa sono tipicamente ≤ 15%;
+    /// 0.20 blocca le risonanze lasciando passare rullanti (tipicamente 25-60%
+    /// del kick anche da speaker del telefono).
+    private nonisolated static var resonanceHolddownRatio: Float { 0.20 }
 
     /// Intervallo massimo valido tra onset (2000 ms → min 30 BPM).
     private nonisolated static var maxIntervalSeconds: Double { 2.000 }
@@ -56,18 +70,20 @@ final class BeatDetector: @unchecked Sendable {
     /// Numero di intervalli nella finestra BPM (media mobile).
     private nonisolated static var bpmWindowSize: Int { 4 }
 
-    // MARK: Kick discrimination constants
+    /// Energia RMS minima assoluta per entrare nell'onset detection.
+    /// Contesto target: batterista live o musica amplificata nel mic del telefono.
+    /// Kick reali ≥ 0.05 rms; rumore ambiente tipico 0.001–0.020 rms.
+    /// 0.040 blocca transienti ambientali senza escludere i colpi più soft.
+    private nonisolated static var minimumOnsetRms: Float { 0.040 }
 
-    /// Cutoff del filtro LP per isolare la banda della grancassa (< kickCutoffHz).
-    /// La cassa ha il fondamentale a 40–100 Hz; il rullante domina sopra i 100 Hz.
+    // MARK: Kick classification constants (solo DEBUG)
+
+    #if DEBUG
+    /// Cutoff LP per separare banda cassa (< 100 Hz) dal rullante (100–250 Hz).
     private nonisolated static var kickCutoffHz: Double { 100.0 }
-
-    /// Frazione minima di energia che deve stare sotto kickCutoffHz perché l'onset
-    /// sia classificato come grancassa (e non rullante/altro).
-    /// 0.28 = almeno il 28% dell'energia totale (30–250 Hz) deve essere < 100 Hz.
-    /// Valori attesi: cassa 0.50–0.70, rullante 0.05–0.20. Soglia 0.28 garantisce
-    /// margine contro le casse con meno low-end senza lasciare passare il rullante.
+    /// kickRatio ≥ 0.28 → 🥁 cassa, altrimenti 🪘 rullante/altro.
     private nonisolated static var kickRatioThreshold: Float { 0.28 }
+    #endif
 
     // MARK: Private state
     // nonisolated(unsafe): tutto acceduto dalla sola DSP queue (serial), concorrenza
@@ -88,17 +104,19 @@ final class BeatDetector: @unchecked Sendable {
     nonisolated(unsafe) private var sessionBPMs: [Double] = []
     private nonisolated static var sessionBPMCap: Int { 2000 }
 
-    // Timing degli onset.
+    // Timing e energia degli onset.
     nonisolated(unsafe) private var lastOnsetTime: Double = 0
+    nonisolated(unsafe) private var lastOnsetRms: Float = 0
 
     // Task che azzera il BPM dopo 3 s di silenzio; cancellato ad ogni nuovo beat.
     nonisolated(unsafe) private var beatResetTask: Task<Void, Never>?
 
-    // Kick discrimination — filtro LP aggiuntivo a kickCutoffHz.
-    // Pre-allocato in init; zero allocazioni nel DSP loop.
+    // Kick classification — filtro LP a 100 Hz per il log 🥁/🪘 (solo DEBUG).
+    #if DEBUG
     nonisolated(unsafe) private var kickLPSetup: vDSP_biquad_Setup?
-    nonisolated(unsafe) private var kickLPDelay: [Float] = [0, 0, 0, 0]   // 2*sections+2
-    nonisolated(unsafe) private var kickWorkBuffer: [Float]                // scratch buffer
+    nonisolated(unsafe) private var kickLPDelay: [Float] = [0, 0, 0, 0]
+    nonisolated(unsafe) private var kickWorkBuffer: [Float] = [Float](repeating: 0, count: 4096)
+    #endif
 
     // MARK: Init
 
@@ -107,14 +125,15 @@ final class BeatDetector: @unchecked Sendable {
     ///   - now: Provider di timestamp iniettabile (default: CFAbsoluteTimeGetCurrent).
     ///     Nei test sostituire con un clock controllato.
     init(state: BeatState, now: @escaping () -> Double = CFAbsoluteTimeGetCurrent) {
-        self.state      = state
-        self.now        = now
-        energyWindow    = [Float](repeating: 0, count: BeatDetector.energyWindowSize)
-        kickWorkBuffer  = [Float](repeating: 0, count: 4096)
+        self.state   = state
+        self.now     = now
+        energyWindow = [Float](repeating: 0, count: BeatDetector.energyWindowSize)
     }
 
     deinit {
+        #if DEBUG
         if let lp = kickLPSetup { vDSP_biquad_DestroySetup(lp) }
+        #endif
     }
 
     // MARK: Testability
@@ -141,9 +160,16 @@ final class BeatDetector: @unchecked Sendable {
         vDSP_rmsqv(ch[0], 1, &rms, n)
 
         // Step 2 — Aggiorna la finestra scorrevole di energia (circular buffer).
+        // Il window viene aggiornato anche per buffer molto silenziosi, così il
+        // warm-up procede normalmente e la soglia adattiva si calibra sul noise floor.
         energyWindow[energyWindowHead] = rms
         energyWindowHead = (energyWindowHead + 1) % BeatDetector.energyWindowSize
         if energyWindowCount < BeatDetector.energyWindowSize { energyWindowCount += 1 }
+
+        // Guard minimo assoluto: blocca rumore ambientale e burst post-riavvio audio.
+        // Impedisce che la finestra si popoli con intervalli fasulli che poi rigettano
+        // come outlier tutti i kick veri.
+        guard rms > BeatDetector.minimumOnsetRms else { return }
 
         // Warm-up: servono almeno 3 campioni per una soglia significativa.
         guard energyWindowCount >= 3 else { return }
@@ -155,24 +181,28 @@ final class BeatDetector: @unchecked Sendable {
         // Step 4 — Onset detection.
         guard rms > threshold, threshold > 0.001 else { return }
 
-        // Step 4b — Kick discrimination: verifica che l'energia sia concentrata
-        // sotto kickCutoffHz (= grancassa) e non nella banda del rullante (100–250 Hz).
-        let kickRMS   = kickBandRMS(samples: ch[0], count: Int(n),
-                                    sampleRate: buffer.format.sampleRate)
-        let kickRatio = rms > 0 ? kickRMS / rms : 0
-        guard kickRatio >= BeatDetector.kickRatioThreshold else {
+        // Step 5 — Refrattario.
+        let t = now()
+        let elapsed = t - lastOnsetTime
+        guard elapsed >= BeatDetector.refractorySeconds else { return }
+
+        // Step 5b — Holddown anti-risonanza: sopprime le code di decadimento
+        // che superano il refrattario ma sono molto più deboli del colpo originale.
+        if elapsed < BeatDetector.holddownSeconds,
+           lastOnsetRms > 0,
+           rms < lastOnsetRms * BeatDetector.resonanceHolddownRatio {
             #if DEBUG
-            bdLog.debug("⛔ rejected  kickRatio=\(kickRatio, format: .fixed(precision: 2))  rms=\(rms, format: .fixed(precision: 4))")
+            bdLog.debug("⛔ holddown   rms=\(rms, format: .fixed(precision: 4))  lastRms=\(self.lastOnsetRms, format: .fixed(precision: 4))  elapsed=\(elapsed, format: .fixed(precision: 3))s")
             #endif
             return
         }
 
-        // Step 5 — Refrattario.
-        let t = now()
-        guard t - lastOnsetTime >= BeatDetector.refractorySeconds else { return }
-
+        lastOnsetRms = rms
         #if DEBUG
-        bdLog.debug("✅ onset      kickRatio=\(kickRatio, format: .fixed(precision: 2))  rms=\(rms, format: .fixed(precision: 4))  threshold=\(threshold, format: .fixed(precision: 4))")
+        let kickRMS   = kickBandRMS(samples: ch[0], count: Int(n), sampleRate: buffer.format.sampleRate)
+        let kickRatio = rms > 0 ? kickRMS / rms : 0
+        let label     = kickRatio >= BeatDetector.kickRatioThreshold ? "🥁 kick  " : "🪘 snare "
+        bdLog.debug("\(label)  rms=\(rms, format: .fixed(precision: 4))  kickRatio=\(kickRatio, format: .fixed(precision: 2))  elapsed=\(elapsed, format: .fixed(precision: 3))s")
         #endif
         registerOnset(at: t)
     }
@@ -187,9 +217,12 @@ final class BeatDetector: @unchecked Sendable {
         onsetIntervals.removeAll()
         sessionBPMs.removeAll()
         lastOnsetTime = 0
+        lastOnsetRms  = 0
         beatResetTask?.cancel()
         beatResetTask = nil
+        #if DEBUG
         kickLPDelay = [0, 0, 0, 0]
+        #endif
         Task { @MainActor [weak state] in
             guard let state else { return }
             state.currentBPM = 0
@@ -238,10 +271,16 @@ final class BeatDetector: @unchecked Sendable {
 
         // Step D — BPM = 60 / media intervalli, arrotondato a 1 decimale.
         let meanInterval = onsetIntervals.reduce(0, +) / Double(onsetIntervals.count)
-        let bpm = rounded1(60.0 / meanInterval)
+        let rawBPM = rounded1(60.0 / meanInterval)
 
-        // BPM individuali per le pills UI (1 decimale ciascuno).
-        let recentBPMs = onsetIntervals.map { rounded1(60.0 / $0) }
+        // Octave correction: kick su battiti alterni (1 e 3) produce intervalli doppi
+        // → BPM dimezzato. Soglia 80 copre kick-rado su brani 80–160 BPM
+        // (intervallo kick 0.75–1.5 s → raw 40–80 BPM → corretto a 80–160 BPM).
+        let octaveFactor: Double = rawBPM < 80 ? 2.0 : 1.0
+        let bpm = rounded1(rawBPM * octaveFactor)
+
+        // BPM individuali per le pills UI (stesso fattore di correzione).
+        let recentBPMs = onsetIntervals.map { rounded1(60.0 / $0 * octaveFactor) }
 
         sessionBPMs.append(bpm)
         if sessionBPMs.count > BeatDetector.sessionBPMCap { sessionBPMs.removeFirst() }
@@ -253,42 +292,6 @@ final class BeatDetector: @unchecked Sendable {
     }
 
     // MARK: Private — DSP helpers
-
-    /// Filtra i campioni con un biquad LP a kickCutoffHz e restituisce il loro RMS.
-    ///
-    /// Il filtro viene inizializzato al primo invocation (sample-rate noto solo a runtime).
-    /// L'inizializzazione è un'unica allocazione fuori dal loop stazionario.
-    nonisolated private func kickBandRMS(samples: UnsafePointer<Float>,
-                                          count: Int,
-                                          sampleRate: Double) -> Float {
-        if kickLPSetup == nil {
-            let fc    = BeatDetector.kickCutoffHz
-            let q     = 1.0 / 2.0.squareRoot()          // Butterworth
-            let w0    = 2.0 * .pi * fc / sampleRate
-            let cosW  = cos(w0)
-            let alpha = sin(w0) / (2.0 * q)
-            let a0    = 1.0 + alpha
-            let coeffs: [Double] = [
-                (1.0 - cosW) / 2.0 / a0,   // b0/a0
-                (1.0 - cosW)       / a0,    // b1/a0
-                (1.0 - cosW) / 2.0 / a0,   // b2/a0
-                -2.0 * cosW        / a0,    // a1/a0
-                (1.0 - alpha)      / a0     // a2/a0
-            ]
-            kickLPSetup = vDSP_biquad_CreateSetup(coeffs, 1)
-        }
-        guard let lp = kickLPSetup, count <= kickWorkBuffer.count else { return 0 }
-        kickWorkBuffer.withUnsafeMutableBufferPointer { buf in
-            guard let p = buf.baseAddress else { return }
-            vDSP_biquad(lp, &kickLPDelay, samples, 1, p, 1, vDSP_Length(count))
-        }
-        var rms: Float = 0
-        kickWorkBuffer.withUnsafeBufferPointer { buf in
-            guard let p = buf.baseAddress else { return }
-            vDSP_rmsqv(p, 1, &rms, vDSP_Length(count))
-        }
-        return rms
-    }
 
     /// Calcola media e deviazione standard dell'energia nella finestra scorrevole.
     /// Opera sui soli `energyWindowCount` campioni riempiti.
@@ -304,7 +307,6 @@ final class BeatDetector: @unchecked Sendable {
         }
         let n    = Float(energyWindowCount)
         let mean = sum / n
-        // Var = E[x²] - E[x]²   (population variance)
         let variance = max(0, sumSq / n - mean * mean)
         return (mean, variance.squareRoot())
     }
@@ -333,6 +335,44 @@ final class BeatDetector: @unchecked Sendable {
         (value * 10).rounded() / 10
     }
 
+    // MARK: Private — kick classification (solo DEBUG)
+
+    #if DEBUG
+    /// Applica un biquad LP a kickCutoffHz e restituisce l'RMS dei campioni filtrati.
+    /// Usato esclusivamente per classificare ogni onset come 🥁 o 🪘 nel log.
+    nonisolated private func kickBandRMS(samples: UnsafePointer<Float>,
+                                          count: Int,
+                                          sampleRate: Double) -> Float {
+        if kickLPSetup == nil {
+            let fc    = BeatDetector.kickCutoffHz
+            let q     = 1.0 / 2.0.squareRoot()
+            let w0    = 2.0 * .pi * fc / sampleRate
+            let cosW  = cos(w0)
+            let alpha = sin(w0) / (2.0 * q)
+            let a0    = 1.0 + alpha
+            let coeffs: [Double] = [
+                (1.0 - cosW) / 2.0 / a0,
+                (1.0 - cosW)       / a0,
+                (1.0 - cosW) / 2.0 / a0,
+                -2.0 * cosW        / a0,
+                (1.0 - alpha)      / a0
+            ]
+            kickLPSetup = vDSP_biquad_CreateSetup(coeffs, 1)
+        }
+        guard let lp = kickLPSetup, count <= kickWorkBuffer.count else { return 0 }
+        kickWorkBuffer.withUnsafeMutableBufferPointer { buf in
+            guard let p = buf.baseAddress else { return }
+            vDSP_biquad(lp, &kickLPDelay, samples, 1, p, 1, vDSP_Length(count))
+        }
+        var rms: Float = 0
+        kickWorkBuffer.withUnsafeBufferPointer { buf in
+            guard let p = buf.baseAddress else { return }
+            vDSP_rmsqv(p, 1, &rms, vDSP_Length(count))
+        }
+        return rms
+    }
+    #endif
+
     // MARK: Private — publish
 
     nonisolated private func publishBeatState(currentBPM: Double, recentBPMs: [Double]) {
@@ -355,7 +395,10 @@ final class BeatDetector: @unchecked Sendable {
 
         Task { @MainActor [weak state] in
             guard let state, !state.tapOverrideActive else { return }
-            state.currentBPM = currentBPM
+            // EMA α=0.7: attenua i picchi transitori mantenendo risposta rapida
+            // ai cambi di tempo reali (~3 beat per convergere a ±1 BPM).
+            let prev = state.currentBPM
+            state.currentBPM = prev > 0 ? rounded1(0.7 * currentBPM + 0.3 * prev) : currentBPM
             state.recentBPMs = recentBPMs
             state.minBPM     = minBPM
             state.maxBPM     = maxBPM
