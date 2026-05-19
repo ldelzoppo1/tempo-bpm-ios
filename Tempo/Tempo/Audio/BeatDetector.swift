@@ -64,8 +64,10 @@ final class BeatDetector: @unchecked Sendable {
     /// Intervallo massimo valido tra onset (2000 ms → min 30 BPM).
     private nonisolated static var maxIntervalSeconds: Double { 2.000 }
 
-    /// Soglia outlier: intervallo scartato se devia > 40 % dalla mediana degli ultimi N.
-    private nonisolated static var outlierThreshold: Double { 0.40 }
+    /// Soglia outlier: intervallo scartato se devia > 13 % dalla mediana degli ultimi N.
+    /// Un batterista umano non varia il tempo di più del 5-8% tra beat consecutivi;
+    /// 13% lascia margine per micro-timing naturale senza accettare falsi positivi.
+    private nonisolated static var outlierThreshold: Double { 0.13 }
 
     /// Numero di intervalli nella finestra BPM (media mobile).
     private nonisolated static var bpmWindowSize: Int { 4 }
