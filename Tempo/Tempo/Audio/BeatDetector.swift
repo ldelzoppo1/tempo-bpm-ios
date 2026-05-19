@@ -91,14 +91,15 @@ final class BeatDetector: @unchecked Sendable {
     /// di energia (transients) invece dei livelli assoluti — robusto a mix compressi.
     private nonisolated static var liveFluxSigma: Float { 1.5 }
 
-    // MARK: Kick classification constants (solo DEBUG)
+    // MARK: Kick classification constants
 
-    #if DEBUG
     /// Cutoff LP per separare banda cassa (< 100 Hz) dal rullante (100–250 Hz).
     private nonisolated static var kickCutoffHz: Double { 100.0 }
-    /// kickRatio ≥ 0.28 → 🥁 cassa, altrimenti 🪘 rullante/altro.
-    private nonisolated static var kickRatioThreshold: Float { 0.28 }
-    #endif
+
+    /// kickRatio minimo per accettare un onset come grancassa in modalità Solo.
+    /// Alzato a 0.35 rispetto al precedente 0.28 per ridurre i falsi positivi
+    /// da tom medio e colpi forti sul rullante che ricadono in banda 40–250 Hz.
+    private nonisolated static var kickRatioThreshold: Float { 0.35 }
 
     // MARK: Private state
     // nonisolated(unsafe): tutto acceduto dalla sola DSP queue (serial), concorrenza
@@ -144,12 +145,10 @@ final class BeatDetector: @unchecked Sendable {
     nonisolated(unsafe) private var fluxWindowHead: Int = 0
     nonisolated(unsafe) private var fluxWindowCount: Int = 0
 
-    // Kick classification — filtro LP a 100 Hz per il log 🥁/🪘 (solo DEBUG).
-    #if DEBUG
+    // Filtro LP kick (< 100 Hz): usato in produzione per filtrare i falsi onset.
     nonisolated(unsafe) private var kickLPSetup: vDSP_biquad_Setup?
     nonisolated(unsafe) private var kickLPDelay: [Float] = [0, 0, 0, 0]
     nonisolated(unsafe) private var kickWorkBuffer: [Float] = [Float](repeating: 0, count: 4096)
-    #endif
 
     // MARK: Init
 
@@ -165,9 +164,7 @@ final class BeatDetector: @unchecked Sendable {
     }
 
     deinit {
-        #if DEBUG
         if let lp = kickLPSetup { vDSP_biquad_DestroySetup(lp) }
-        #endif
     }
 
     // MARK: Testability
@@ -236,12 +233,20 @@ final class BeatDetector: @unchecked Sendable {
             return
         }
 
-        lastOnsetRms = rms
-        #if DEBUG
+        // Kick filter: scarta onset con rapporto sub-bass/full-band insufficiente.
+        // Tom medi e rullanti forti hanno kickRatio < 0.35 — non sono grancasse.
         let kickRMS   = kickBandRMS(samples: ch[0], count: Int(n), sampleRate: buffer.format.sampleRate)
         let kickRatio = rms > 0 ? kickRMS / rms : 0
-        let label     = kickRatio >= BeatDetector.kickRatioThreshold ? "🥁 kick  " : "🪘 snare "
-        bdLog.debug("\(label)  rms=\(rms, format: .fixed(precision: 4))  kickRatio=\(kickRatio, format: .fixed(precision: 2))  elapsed=\(elapsed, format: .fixed(precision: 3))s")
+        guard kickRatio >= BeatDetector.kickRatioThreshold else {
+            #if DEBUG
+            bdLog.debug("🪘 snare/tom  rms=\(rms, format: .fixed(precision: 4))  kickRatio=\(kickRatio, format: .fixed(precision: 2))  elapsed=\(elapsed, format: .fixed(precision: 3))s — scartato")
+            #endif
+            return
+        }
+
+        lastOnsetRms = rms
+        #if DEBUG
+        bdLog.debug("🥁 kick  rms=\(rms, format: .fixed(precision: 4))  kickRatio=\(kickRatio, format: .fixed(precision: 2))  elapsed=\(elapsed, format: .fixed(precision: 3))s")
         #endif
         registerOnset(at: t)
     }
@@ -310,9 +315,7 @@ final class BeatDetector: @unchecked Sendable {
         fluxWindow      = [Float](repeating: 0, count: BeatDetector.energyWindowMaxSize)
         fluxWindowHead  = 0
         fluxWindowCount = 0
-        #if DEBUG
         kickLPDelay = [0, 0, 0, 0]
-        #endif
         Task { @MainActor [weak state] in
             guard let state else { return }
             state.currentBPM = 0
@@ -451,11 +454,10 @@ final class BeatDetector: @unchecked Sendable {
         (value * 10).rounded() / 10
     }
 
-    // MARK: Private — kick classification (solo DEBUG)
+    // MARK: Private — kick classification
 
-    #if DEBUG
     /// Applica un biquad LP a kickCutoffHz e restituisce l'RMS dei campioni filtrati.
-    /// Usato esclusivamente per classificare ogni onset come 🥁 o 🪘 nel log.
+    /// Usato in produzione per filtrare onset non-kick (tom, rullante) in modalità Solo.
     nonisolated private func kickBandRMS(samples: UnsafePointer<Float>,
                                           count: Int,
                                           sampleRate: Double) -> Float {
@@ -487,7 +489,6 @@ final class BeatDetector: @unchecked Sendable {
         }
         return rms
     }
-    #endif
 
     // MARK: Private — publish
 
