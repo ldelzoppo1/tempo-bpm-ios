@@ -127,6 +127,11 @@ final class BeatDetector: @unchecked Sendable {
     nonisolated(unsafe) private var lastOnsetTime: Double = 0
     nonisolated(unsafe) private var lastOnsetRms: Float = 0
 
+    // Confidenza ritmica [0.0–1.0]: sale con ogni beat valido, scende su outlier o pausa.
+    // Governa l'α dell'EMA: bassa confidenza → α più alto (adattamento rapido dopo fill);
+    // alta confidenza → α più basso (stabilità su ritmo regolare).
+    nonisolated(unsafe) private var rhythmConfidence: Double = 0
+
     // Task che azzera il BPM dopo 3 s di silenzio; cancellato ad ogni nuovo beat.
     nonisolated(unsafe) private var beatResetTask: Task<Void, Never>?
 
@@ -294,6 +299,7 @@ final class BeatDetector: @unchecked Sendable {
         energyWindowHead  = 0
         energyWindowCount = 0
         lastValidBPM      = 0
+        rhythmConfidence  = 0
         onsetIntervals.removeAll()
         sessionBPMs.removeAll()
         lastOnsetTime = 0
@@ -322,9 +328,10 @@ final class BeatDetector: @unchecked Sendable {
     // MARK: Private — onset logic
 
     nonisolated private func registerOnset(at time: Double) {
-        // Gap > 2 s: pausa ritmica, azzera rolling window ma non il BPM.
+        // Gap > 2 s: pausa ritmica, azzera rolling window e azzera la confidenza.
         if lastOnsetTime > 0 && time - lastOnsetTime > 2.0 {
             onsetIntervals.removeAll()
+            rhythmConfidence = 0
         }
 
         defer { lastOnsetTime = time }
@@ -341,7 +348,12 @@ final class BeatDetector: @unchecked Sendable {
         // Step B — Outlier rejection: ±13 % dalla mediana degli ultimi N intervalli.
         if !onsetIntervals.isEmpty {
             let med = median(onsetIntervals)
-            guard abs(interval - med) / med <= BeatDetector.outlierThreshold else { return }
+            guard abs(interval - med) / med <= BeatDetector.outlierThreshold else {
+                // Outlier: abbassa la confidenza — il sistema diventa più plastico
+                // per aggiornarsi rapidamente al nuovo tempo dopo un fill.
+                rhythmConfidence = max(0, rhythmConfidence - 0.3)
+                return
+            }
         }
 
         // Step C — Aggiorna rolling window (max 4 intervalli).
@@ -366,6 +378,9 @@ final class BeatDetector: @unchecked Sendable {
         // Aggiorna la stima BPM per il calcolo adattivo della finestra energia.
         lastValidBPM = bpm
 
+        // Beat valido: aumenta la confidenza ritmica.
+        rhythmConfidence = min(1.0, rhythmConfidence + 0.12)
+
         // BPM individuali per le pills UI (stesso fattore di correzione).
         let recentBPMs = onsetIntervals.map { rounded1(60.0 / $0 * octaveFactor) }
 
@@ -375,7 +390,7 @@ final class BeatDetector: @unchecked Sendable {
         #if DEBUG
         bdLog.debug("🥁 bpm=\(bpm, format: .fixed(precision: 1))  interval=\(interval, format: .fixed(precision: 3))s  window=\(self.onsetIntervals.count)  eWin=\(self.effectiveWindowSize)")
         #endif
-        publishBeatState(currentBPM: bpm, recentBPMs: recentBPMs)
+        publishBeatState(currentBPM: bpm, recentBPMs: recentBPMs, confidence: rhythmConfidence)
     }
 
     // MARK: Private — DSP helpers
@@ -476,7 +491,7 @@ final class BeatDetector: @unchecked Sendable {
 
     // MARK: Private — publish
 
-    nonisolated private func publishBeatState(currentBPM: Double, recentBPMs: [Double]) {
+    nonisolated private func publishBeatState(currentBPM: Double, recentBPMs: [Double], confidence: Double) {
         let minBPM = sessionBPMs.min() ?? 0
         let maxBPM = sessionBPMs.max() ?? 0
         let avgBPM = sessionBPMs.isEmpty
@@ -496,10 +511,14 @@ final class BeatDetector: @unchecked Sendable {
 
         Task { @MainActor [weak state] in
             guard let state, !state.tapOverrideActive else { return }
-            // EMA α=0.7: attenua i picchi transitori mantenendo risposta rapida
-            // ai cambi di tempo reali (~3 beat per convergere a ±1 BPM).
+            // EMA con α adattivo basato sulla confidenza ritmica:
+            //   α = 0.85 a confidenza 0 (post-fill, bassa) → aggiornamento rapido al nuovo tempo
+            //   α = 0.60 a confidenza 1 (ritmo stabile) → smorzamento dei picchi transitori
+            // Questo previene il freeze su numeri tondi (es. 120.0): dopo un fill la confidenza
+            // scende, α sale, e il sistema si aggiorna rapidamente al BPM reale.
+            let alpha = 0.85 - 0.25 * confidence
             let prev = state.currentBPM
-            state.currentBPM = prev > 0 ? rounded1(0.7 * currentBPM + 0.3 * prev) : currentBPM
+            state.currentBPM = prev > 0 ? rounded1(alpha * currentBPM + (1 - alpha) * prev) : currentBPM
             state.recentBPMs = recentBPMs
             state.minBPM     = minBPM
             state.maxBPM     = maxBPM
