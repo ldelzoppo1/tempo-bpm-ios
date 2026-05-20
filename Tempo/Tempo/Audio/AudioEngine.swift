@@ -401,6 +401,18 @@ final class AudioEngine: AudioBufferProvider, @unchecked Sendable {
         // Step 6 — Normalize energy bands to [0, 1] for the waveform UI.
         var maxMag: Float = 0
         vDSP_maxv(magnitudesBuffer, 1, &maxMag, vDSP_Length(AudioEngine.energyBandCount))
+
+        // –46 dBFS threshold: below this level the signal is microphone noise, not
+        // real audio. Without this guard, even 3 dB of ambient noise would be
+        // normalised to a full-height bar, making the waveform unreadable in silence.
+        guard maxMag > 0.005 else {
+            Task { @MainActor [weak self] in
+                self?.state?.energyBands = Array(repeating: 0.0,
+                                                 count: AudioEngine.energyBandCount)
+            }
+            return
+        }
+
         magnitudesBuffer.withUnsafeMutableBufferPointer { magSlice in
             guard let mp = magSlice.baseAddress else { return }
             if maxMag > 0 {
@@ -493,6 +505,11 @@ final class AudioEngine: AudioBufferProvider, @unchecked Sendable {
             guard let optRaw = info[AVAudioSessionInterruptionOptionKey] as? UInt,
                   AVAudioSession.InterruptionOptions(rawValue: optRaw).contains(.shouldResume)
             else { stop(); return }
+            // Reset IIR delay buffers so that stale pre-interruption state does not
+            // produce a spurious transient — and a false beat onset — on the first
+            // buffer processed after the engine restarts.
+            hpDelay = [0, 0, 0, 0]
+            lpDelay = [0, 0, 0, 0]
             try? avEngine.start()
             Task { @MainActor [weak state] in state?.isListening = true }
 
