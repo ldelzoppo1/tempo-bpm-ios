@@ -83,7 +83,7 @@ Le due modalità non descrivono la distanza dalla fonte sonora, ma il contesto a
 
 **Conseguenza algoritmica critica**: in entrambe le modalità il kick è il segnale più forte nella posizione del microfono. In modalità LIVE il problema non è un kick debole o compresso, ma un **noise floor significativamente più alto**. Questo significa che:
 - `minimumOnsetRms` è il parametro più critico in LIVE (gate contro il rumore del palco)
-- La discriminazione kick/non-kick è ancora possibile perché il kick è near-field
+- La discriminazione kick/non-kick è ancora possibile perché il kick è near-field; LIVE usa `liveKickRatioThreshold = 0.20` (vs 0.35 di SOLO): blocca snare/cymbal bleed dai monitor (kickRatio 0.05–0.15) e vibrazioni broadband (0.10–0.20), passa il kick near-field (0.35–0.60)
 - Lo scenario "ascolto da speaker lontano" o "registrazione MP3" **non è un use case di questa app**
 
 ### Standing waves — sala prove
@@ -140,7 +140,7 @@ Usa questa tabella come **primo punto di accesso** quando ricevi una segnalazion
 | Nessun onset dopo 5+ colpi forti | `minimumOnsetRms` troppo alto per il contesto | Abbassare `minimumOnsetRms` (es. 0.040 → 0.020). Testare in ambiente silenzioso. |
 | Onset rilevati ma BPM = 0 | Meno di 2 intervalli validi nella rolling window | Normale durante il warm-up (primi 2 beat). Se persiste, outlier rejection troppo aggressivo. |
 | Kick non passa il kick filter | `kickRatioThreshold` troppo alto per il mic/contesto | Abbassare (es. 0.35 → 0.28). Verificare con `--verbose` che `kickRatio` sia calcolato. |
-| SOLO non rileva con altri strumenti sul palco | Noise floor alto dal palco alza la baseline → kick non supera la soglia | Passare a modalità LIVE: nessun kick filter, onset detection più reattiva al transiente diretto. |
+| SOLO non rileva con altri strumenti sul palco | Noise floor alto dal palco alza la baseline → kick non supera la soglia | Passare a modalità LIVE: flux gate più reattivo al transiente diretto, kick filter attenuato (0.20). |
 
 ### Falsi positivi (onset non voluti)
 

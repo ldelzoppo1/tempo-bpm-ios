@@ -86,10 +86,20 @@ final class BeatDetector: @unchecked Sendable {
 
     /// Soglia flux: onset se flux > media + std × liveFluxSigma.
     /// Più alta di onsetSigma perché il flux (derivata) è più rumoroso dell'energia assoluta.
-    /// Il mic iPhone filtra già i sub-bass sotto ~120 Hz: non occorre un LP aggiuntivo.
     /// Usiamo il segnale 30–250 Hz già pre-filtrato da AudioEngine e rileviamo le salite
-    /// di energia (transients) invece dei livelli assoluti — robusto a mix compressi.
+    /// di energia (transients) invece dei livelli assoluti — più reattivo del livello RMS
+    /// assoluto in presenza di un noise floor elevato (monitor, ampli basso, riverbero PA).
     private nonisolated static var liveFluxSigma: Float { 1.5 }
+
+    /// kickRatio minimo per accettare un onset come grancassa in modalità LIVE.
+    /// Valore inferiore a kickRatioThreshold (0.35 in SOLO) perché in LIVE il segnale
+    /// è già gatedato dal flux: il kick near-field (0.5–1 m) produce kickRatio ≈ 0.35–0.60,
+    /// mentre snare/cymbal bleed dai monitor hanno kickRatio ≈ 0.05–0.15 e sarebbero
+    /// accettati senza questo filtro.
+    /// 0.20 blocca snare bleed e vibrazioni broadband (caso 1 e 2) accettando tutti i kick
+    /// near-field. Le note gravi del basso (kickRatio 0.30–0.45 a ~3 m) cadono nella zona
+    /// ambigua: parzialmente filtrate dal minimumOnsetRms e dall'SPL near-field del kick.
+    private nonisolated static var liveKickRatioThreshold: Float { 0.20 }
 
     // MARK: Kick classification constants
 
@@ -268,8 +278,8 @@ final class BeatDetector: @unchecked Sendable {
         vDSP_rmsqv(ch[0], 1, &rms, n)
 
         // Derivata positiva dell'energia: rileva le salite brusche (transienti).
-        // Robusto a mix compressi perché non dipende dal livello assoluto ma dal cambio.
-        // Il mic iPhone agisce già come HP naturale sotto ~120 Hz: nessun LP aggiuntivo serve.
+        // Robusto a noise floor alto (palco, monitor) perché non dipende dal livello assoluto
+        // ma dal cambio. Il kick near-field produce un flux netto anche in un mix rumoroso.
         let flux = max(0, rms - prevRMS)
         prevRMS = rms
 
@@ -285,6 +295,20 @@ final class BeatDetector: @unchecked Sendable {
         let fluxThreshold = fluxMean + fluxStd * BeatDetector.liveFluxSigma
         guard flux > fluxThreshold, fluxThreshold > 0 else { return }
 
+        // Kick filter attenuato in LIVE: soglia più bassa rispetto a SOLO (0.20 vs 0.35)
+        // perché il flux gate riduce già i falsi positivi da segnali continui.
+        // Blocca snare/cymbal bleed dai monitor (kickRatio ≈ 0.05–0.15) e vibrazioni palco
+        // broadband (kickRatio ≈ 0.10–0.20). Il kick near-field (kickRatio ≈ 0.35–0.60) passa
+        // sempre. Nota gravi del basso a ~3 m (kickRatio ≈ 0.30–0.45) parzialmente filtrate
+        // dal minimumOnsetRms (SPL ~9.5 dB inferiore al kick) e dall'outlier rejection.
+        let liveKickRatio = kickBandRMS(samples: ch[0], count: Int(n), sampleRate: buffer.format.sampleRate) / (rms > 0 ? rms : 1)
+        guard liveKickRatio >= BeatDetector.liveKickRatioThreshold else {
+            #if DEBUG
+            bdLog.debug("🎵 live snare/bleed  rms=\(rms, format: .fixed(precision: 4))  kickRatio=\(liveKickRatio, format: .fixed(precision: 2)) — scartato")
+            #endif
+            return
+        }
+
         let t = now()
         let elapsed = t - lastOnsetTime
         guard elapsed >= BeatDetector.refractorySeconds else { return }
@@ -297,7 +321,7 @@ final class BeatDetector: @unchecked Sendable {
 
         lastOnsetRms = rms
         #if DEBUG
-        bdLog.debug("🎵 live flux=\(flux, format: .fixed(precision: 4))  rms=\(rms, format: .fixed(precision: 4))  thr=\(fluxThreshold, format: .fixed(precision: 4))  elapsed=\(elapsed, format: .fixed(precision: 3))s")
+        bdLog.debug("🎵 live flux=\(flux, format: .fixed(precision: 4))  rms=\(rms, format: .fixed(precision: 4))  thr=\(fluxThreshold, format: .fixed(precision: 4))  kickRatio=\(liveKickRatio, format: .fixed(precision: 2))  elapsed=\(elapsed, format: .fixed(precision: 3))s")
         #endif
         registerOnset(at: t)
     }

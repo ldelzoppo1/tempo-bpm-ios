@@ -178,7 +178,8 @@ Modalità LIVE (palco con altri strumentisti, noise floor alto)
 Stesso gate RMS (minimumOnsetRms) e stessa finestra adattiva.
 flux = max(0, rms − prevRMS)   ← derivata positiva dell'energia
 Soglia flux = media_flux + std_flux × 1.5 (liveFluxSigma)
-flux > soglia → onset  (stesso refrattario + holddown, senza kick filter)
+flux > soglia → kick filter attenuato: kickRatio ≥ 0.20 (liveKickRatioThreshold)
+kick filter ok → onset  (stesso refrattario + holddown)
 ```
 
 **Parametri** (costanti in `BeatDetector`):

@@ -73,7 +73,8 @@ bpmWindowSize:           Int    = 4
 minimumOnsetRms:         Float  = 0.040
 liveFluxSigma:           Float  = 1.5
 kickCutoffHz:            Double = 100.0
-kickRatioThreshold:      Float  = 0.35
+kickRatioThreshold:      Float  = 0.35   // Solo mode
+liveKickRatioThreshold:  Float  = 0.20   // Live mode (soglia più bassa: flux gate già filtra segnali continui)
 ```
 
 Non cambiare questi valori senza motivazione documentata e test di regressione.
