@@ -102,13 +102,14 @@ struct BPMPanel: View {
 
     private var beatDots: some View {
         HStack(spacing: 12) {
-            ForEach(0..<4, id: \.self) { i in
-                let isActive = i == state.beatPosition % 4 && state.currentBPM > 0
+            ForEach(0..<state.detectedMeter, id: \.self) { i in
+                // beatInMeter is 1-based; dot index i is 0-based
+                let isActive = i == (state.beatInMeter - 1) && state.currentBPM > 0
                 Circle()
                     .fill(isActive ? Color.tempoAccent : Color.tempoMuted)
                     .frame(width: 10, height: 10)
                     .shadow(color: isActive ? Color.tempoAccent.opacity(0.8) : .clear, radius: 6)
-                    .animation(.easeOut(duration: 0.1), value: state.beatPosition)
+                    .animation(.easeOut(duration: 0.1), value: state.beatInMeter)
             }
         }
     }

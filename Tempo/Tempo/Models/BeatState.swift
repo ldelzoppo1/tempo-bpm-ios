@@ -19,6 +19,12 @@ final class BeatState {
     var beatFlash: Bool = false         // true for 100 ms per beat
     var beatPosition: Int = 0          // 0–3, cycles on every detected onset
 
+    // Written by RhythmAnalyzer
+    var detectedMeter: Int = 4         // time signature numerator (e.g. 4, 3, 5, 7)
+    var meterDenominator: Int = 4      // time signature denominator (4 or 8)
+    var meterConfidence: Double = 0.0  // detection confidence [0.0, 1.0]
+    var beatInMeter: Int = 1           // current beat position within the bar, 1-based
+
     // Written by TapTempo
     var tapCount: Int = 0
     var tapBPM: Double = 0

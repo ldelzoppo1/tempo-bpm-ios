@@ -7,6 +7,7 @@ struct TempoApp: App {
     @State private var beatState = BeatState()
     @State private var audioEngine: AudioEngine?
     @State private var beatDetector: BeatDetector?
+    @State private var rhythmAnalyzer: RhythmAnalyzer?
 
     var body: some Scene {
         WindowGroup {
@@ -24,8 +25,14 @@ struct TempoApp: App {
         UIApplication.shared.isIdleTimerDisabled = true
         let engine   = AudioEngine(state: beatState)
         let detector = BeatDetector(state: beatState)
+        let analyzer = RhythmAnalyzer(state: beatState)
         audioEngine   = engine
         beatDetector  = detector
+        rhythmAnalyzer = analyzer
+
+        detector.onOnset = { [weak analyzer] timestamp, rms in
+            analyzer?.registerOnset(timestamp: timestamp, rms: rms)
+        }
 
         Task.detached(priority: .high) {
             try? engine.startCapture { buffer in
@@ -37,8 +44,10 @@ struct TempoApp: App {
     private func stopAudioPipeline() {
         audioEngine?.stopCapture()
         beatDetector?.reset()
-        audioEngine  = nil
-        beatDetector = nil
+        rhythmAnalyzer?.reset()
+        audioEngine    = nil
+        beatDetector   = nil
+        rhythmAnalyzer = nil
         UIApplication.shared.isIdleTimerDisabled = false
     }
 

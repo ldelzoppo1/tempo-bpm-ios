@@ -8,8 +8,12 @@ private let bdLog = Logger(subsystem: "com.ldelzoppo.tempo", category: "BeatDete
 
 // MARK: - BeatDetector
 
-/// Rileva i beat da un buffer PCM pre-filtrato (banda 30–250 Hz) e pubblica il BPM
-/// su BeatState via @MainActor.
+/// Rileva gli onset da un buffer PCM pre-filtrato (banda 30–250 Hz) e notifica
+/// tramite la closure `onOnset`.
+///
+/// Questa classe è un puro onset detector: non calcola BPM né pubblica statistiche
+/// di sessione. Il calcolo BPM e le statistiche sono delegati a RhythmAnalyzer
+/// (TBD-68), che riceve gli onset tramite la closure `onOnset`.
 ///
 /// ## Algoritmo
 ///
@@ -24,17 +28,13 @@ private let bdLog = Logger(subsystem: "com.ldelzoppo.tempo", category: "BeatDete
 ///    Previene la doppia rilevazione della coda di decadimento della cassa.
 /// 6. Intervallo massimo: 2400 ms — intervalli più lunghi indicano pausa.
 /// 7. Outlier rejection: nuovo intervallo scartato se devia > ±13 % dalla
-///    mediana degli ultimi 4 intervalli validi.
-///
-/// **Calcolo BPM**
-/// - Media degli ultimi 4 intervalli validi → BPM con 1 decimale.
-/// - Aggiornamento ad ogni beat, non su timer.
-/// - `recentBPMs`: 4 BPM individuali per le pills UI.
-/// - Reset automatico a 0 dopo 3 s senza beat rilevati.
+///    mediana degli ultimi 4 intervalli validi (IOI).
 ///
 /// ## Threading
 /// `process(buffer:)` è chiamato sincrono dalla DSP queue di AudioEngine.
-/// Tutte le scritture su BeatState avvengono via `Task { @MainActor in … }`.
+/// La closure `onOnset` è invocata sulla stessa DSP queue.
+/// Le scritture su BeatState (`beatPosition`, `beatFlash`) avvengono via
+/// `Task { @MainActor in … }`.
 final class BeatDetector: @unchecked Sendable {
 
     // MARK: DSP constants
@@ -124,6 +124,13 @@ final class BeatDetector: @unchecked Sendable {
     /// da tom medio e colpi forti sul rullante che ricadono in banda 40–250 Hz.
     private nonisolated static var kickRatioThreshold: Float { 0.35 }
 
+    // MARK: Public interface — onset notification
+
+    /// Closure invocata ad ogni onset valido con `(timestamp: Double, rms: Float)`.
+    /// Il timestamp è `CACurrentMediaTime()` al momento dell'onset.
+    /// Chiamata sulla DSP queue — non fare allocazioni o chiamate ObjC nel body.
+    nonisolated(unsafe) var onOnset: ((Double, Float) -> Void)?
+
     // MARK: Private state
     // nonisolated(unsafe): tutto acceduto dalla sola DSP queue (serial), concorrenza
     // manuale garantita dall'uso esclusivo da un singolo DispatchQueue consumer.
@@ -137,27 +144,21 @@ final class BeatDetector: @unchecked Sendable {
     nonisolated(unsafe) private var energyWindowHead: Int = 0
     nonisolated(unsafe) private var energyWindowCount: Int = 0
 
-    // Ultimo BPM valido — usato per calcolare la dimensione adattiva della finestra.
-    nonisolated(unsafe) private var lastValidBPM: Double = 0
+    // Ultimo IOI valido (secondi) — usato per calcolare la dimensione adattiva della finestra.
+    // Sostituisce lastValidBPM: l'IOI è l'intervallo grezzo tra due onset consecutivi validi,
+    // senza la conversione in BPM (che spetta a RhythmAnalyzer).
+    nonisolated(unsafe) private var lastValidIOI: Double = 0
 
-    // Ultimi N intervalli validi (secondi) — rolling window per BPM.
+    // Ultimi N IOI validi (secondi) — rolling window per l'outlier rejection.
     nonisolated(unsafe) private var onsetIntervals: [Double] = []
-
-    // Tutti i BPM validi della sessione (capped) — per min/max/avg.
-    nonisolated(unsafe) private var sessionBPMs: [Double] = []
-    private nonisolated static var sessionBPMCap: Int { 2000 }
 
     // Timing e energia degli onset.
     nonisolated(unsafe) private var lastOnsetTime: Double = 0
     nonisolated(unsafe) private var lastOnsetRms: Float = 0
 
     // Confidenza ritmica [0.0–1.0]: sale con ogni beat valido, scende su outlier o pausa.
-    // Governa l'α dell'EMA: bassa confidenza → α più alto (adattamento rapido dopo fill);
-    // alta confidenza → α più basso (stabilità su ritmo regolare).
+    // Governa la dimensione adattiva della finestra energia.
     nonisolated(unsafe) private var rhythmConfidence: Double = 0
-
-    // Task che azzera il BPM dopo 3 s di silenzio; cancellato ad ogni nuovo beat.
-    nonisolated(unsafe) private var beatResetTask: Task<Void, Never>?
 
     // Modalità corrente — sincronizzata da TempoApp via setMode(_:).
     nonisolated(unsafe) private var currentMode: DetectionMode = .solo
@@ -277,7 +278,7 @@ final class BeatDetector: @unchecked Sendable {
         #if DEBUG
         bdLog.debug("🥁 kick  rms=\(rms, format: .fixed(precision: 4))  kickRatio=\(kickRatio, format: .fixed(precision: 2))  elapsed=\(elapsed, format: .fixed(precision: 3))s")
         #endif
-        registerOnset(at: t)
+        registerOnset(at: t, rms: rms)
     }
 
     // MARK: Live mode — energy flux su segnale 30–250 Hz (già filtrato da AudioEngine)
@@ -341,7 +342,7 @@ final class BeatDetector: @unchecked Sendable {
         #if DEBUG
         bdLog.debug("🎵 live flux=\(flux, format: .fixed(precision: 4))  rms=\(rms, format: .fixed(precision: 4))  thr=\(fluxThreshold, format: .fixed(precision: 4))  kickRatio=\(liveKickRatio, format: .fixed(precision: 2))  elapsed=\(elapsed, format: .fixed(precision: 3))s")
         #endif
-        registerOnset(at: t)
+        registerOnset(at: t, rms: rms)
     }
 
     /// Azzera lo stato interno e pubblica il reset su BeatState.
@@ -351,14 +352,11 @@ final class BeatDetector: @unchecked Sendable {
         energyWindow = [Float](repeating: 0, count: BeatDetector.energyWindowMaxSize)
         energyWindowHead  = 0
         energyWindowCount = 0
-        lastValidBPM      = 0
+        lastValidIOI      = 0
         rhythmConfidence  = 0
         onsetIntervals.removeAll()
-        sessionBPMs.removeAll()
         lastOnsetTime = 0
         lastOnsetRms  = 0
-        beatResetTask?.cancel()
-        beatResetTask = nil
         prevRMS         = 0
         fluxWindow      = [Float](repeating: 0, count: BeatDetector.energyWindowMaxSize)
         fluxWindowHead  = 0
@@ -366,20 +364,15 @@ final class BeatDetector: @unchecked Sendable {
         kickLPDelay = [0, 0, 0, 0]
         Task { @MainActor [weak state] in
             guard let state else { return }
-            state.currentBPM = 0
-            state.recentBPMs = []
-            state.minBPM     = 0
-            state.maxBPM     = 0
-            state.avgBPM     = 0
-            state.stability  = 0
-            state.beatFlash  = false
+            state.beatFlash    = false
+            state.beatPosition = 0
         }
     }
 
     // MARK: Private — onset logic
 
-    nonisolated private func registerOnset(at time: Double) {
-        // Gap > 2 s: pausa ritmica, azzera rolling window e azzera la confidenza.
+    nonisolated private func registerOnset(at time: Double, rms: Float) {
+        // Gap > maxIntervalSeconds: pausa ritmica, azzera rolling window e confidenza.
         if lastOnsetTime > 0 && time - lastOnsetTime > BeatDetector.maxIntervalSeconds {
             onsetIntervals.removeAll()
             rhythmConfidence = 0
@@ -387,72 +380,71 @@ final class BeatDetector: @unchecked Sendable {
 
         defer { lastOnsetTime = time }
 
-        // Primo onset: registra solo il timestamp.
-        guard lastOnsetTime > 0 else { return }
+        // Primo onset: registra solo il timestamp, poi notifica senza IOI.
+        guard lastOnsetTime > 0 else {
+            let ts = CACurrentMediaTime()
+            onOnset?(ts, rms)
+            #if DEBUG
+            bdLog.debug("🥁 onset[1st]  rms=\(rms, format: .fixed(precision: 4))  ts=\(ts, format: .fixed(precision: 3))")
+            #endif
+            return
+        }
 
         let interval = time - lastOnsetTime
 
-        // Step A — Valida range BPM (25–171 BPM → 350 ms–2400 ms).
+        // Step A — Valida range IOI (350 ms–2400 ms → 25–171 BPM equivalenti).
         guard interval >= BeatDetector.refractorySeconds,
               interval <= BeatDetector.maxIntervalSeconds else { return }
 
-        // Step B — Outlier rejection: ±13 % dalla mediana degli ultimi N intervalli.
+        // Step B — Outlier rejection: ±13 % dalla mediana degli ultimi N IOI.
         if !onsetIntervals.isEmpty {
             let med = median(onsetIntervals)
             guard abs(interval - med) / med <= BeatDetector.outlierThreshold else {
                 // Outlier: abbassa la confidenza — il sistema diventa più plastico
                 // per aggiornarsi rapidamente al nuovo tempo dopo un fill.
                 rhythmConfidence = max(0, rhythmConfidence - 0.3)
+                #if DEBUG
+                bdLog.debug("⛔ outlier  interval=\(interval, format: .fixed(precision: 3))s  median=\(med, format: .fixed(precision: 3))s")
+                #endif
                 return
             }
         }
 
-        // Step C — Aggiorna rolling window (max 4 intervalli).
+        // Step C — Aggiorna rolling window IOI (max bpmWindowSize elementi).
         onsetIntervals.append(interval)
         if onsetIntervals.count > BeatDetector.bpmWindowSize {
             onsetIntervals.removeFirst()
         }
 
-        // Serve almeno 2 intervalli per BPM affidabile.
-        guard onsetIntervals.count >= 2 else { return }
-
-        // Step D — BPM = 60 / media intervalli, arrotondato a 1 decimale.
-        let meanInterval = onsetIntervals.reduce(0, +) / Double(onsetIntervals.count)
-        let rawBPM = rounded1(60.0 / meanInterval)
-
-        // Octave correction: kick su battiti alterni (1 e 3) produce intervalli doppi
-        // → BPM dimezzato. Soglia 80 copre kick-rado su brani 80–160 BPM
-        // (intervallo kick 0.75–1.5 s → raw 40–80 BPM → corretto a 80–160 BPM).
-        let octaveFactor: Double = rawBPM < 80 ? 2.0 : 1.0
-        let bpm = rounded1(rawBPM * octaveFactor)
-
-        // Aggiorna la stima BPM per il calcolo adattivo della finestra energia.
-        lastValidBPM = bpm
+        // Aggiorna l'IOI valido più recente per la dimensione adattiva della finestra.
+        lastValidIOI = interval
 
         // Beat valido: aumenta la confidenza ritmica.
         rhythmConfidence = min(1.0, rhythmConfidence + 0.12)
 
-        // BPM individuali per le pills UI (stesso fattore di correzione).
-        let recentBPMs = onsetIntervals.map { rounded1(60.0 / $0 * octaveFactor) }
-
-        sessionBPMs.append(bpm)
-        if sessionBPMs.count > BeatDetector.sessionBPMCap { sessionBPMs.removeFirst() }
-
+        let ts = CACurrentMediaTime()
         #if DEBUG
-        bdLog.debug("🥁 bpm=\(bpm, format: .fixed(precision: 1))  interval=\(interval, format: .fixed(precision: 3))s  window=\(self.onsetIntervals.count)  eWin=\(self.effectiveWindowSize)")
+        bdLog.debug("🥁 onset  rms=\(rms, format: .fixed(precision: 4))  ioi=\(interval, format: .fixed(precision: 3))s  window=\(self.onsetIntervals.count)  eWin=\(self.effectiveWindowSize)  ts=\(ts, format: .fixed(precision: 3))")
         #endif
-        publishBeatState(currentBPM: bpm, recentBPMs: recentBPMs, confidence: rhythmConfidence)
+
+        // Notifica il consumer (tipicamente RhythmAnalyzer) con timestamp e RMS.
+        onOnset?(ts, rms)
+
+        // Aggiorna beatPosition e beatFlash su @MainActor.
+        publishOnsetToState(rms: rms)
     }
 
     // MARK: Private — DSP helpers
 
     /// Dimensione effettiva della finestra energia: copre 4 beat stimati.
-    /// Senza stima BPM usa il massimo (finestra larga per calibrazione).
-    /// Con BPM noto: più lenta a BPM bassi (finestra più larga), più reattiva ad alti BPM.
+    /// Senza un IOI noto usa il massimo (finestra larga per calibrazione).
+    /// Con IOI noto: più lenta a BPM bassi (finestra più larga), più reattiva ad alti BPM.
+    /// L'IOI (inter-onset interval, secondi) viene usato direttamente senza conversione
+    /// in BPM, perché BeatDetector non calcola più il BPM.
     nonisolated private var effectiveWindowSize: Int {
-        guard lastValidBPM > 0 else { return BeatDetector.energyWindowMaxSize }
-        // buffers per beat = (sampleRate / frameSize) / (BPM / 60)
-        let buffersPerBeat = (44100.0 / 2048.0) * (60.0 / lastValidBPM)
+        guard lastValidIOI > 0 else { return BeatDetector.energyWindowMaxSize }
+        // buffers per beat = (sampleRate / frameSize) × IOI
+        let buffersPerBeat = (44100.0 / 2048.0) * lastValidIOI
         let target = Int((buffersPerBeat * 4.0).rounded())
         return min(BeatDetector.energyWindowMaxSize, max(BeatDetector.energyWindowSize, target))
     }
@@ -485,21 +477,6 @@ final class BeatDetector: @unchecked Sendable {
         return n % 2 == 0
             ? (sorted[n / 2 - 1] + sorted[n / 2]) / 2
             : sorted[n / 2]
-    }
-
-    /// Calcola la stabilità del ritmo come 1 − CV × 5 (clampato in [0, 1]).
-    nonisolated private func computeStability() -> Double {
-        guard onsetIntervals.count >= 2 else { return 0 }
-        let n    = Double(onsetIntervals.count)
-        let mean = onsetIntervals.reduce(0, +) / n
-        let variance = onsetIntervals.reduce(0.0) { $0 + ($1 - mean) * ($1 - mean) } / n
-        let cv = variance.squareRoot() / mean
-        return max(0.0, min(1.0, 1.0 - cv * 5.0))
-    }
-
-    /// Arrotonda a 1 decimale.
-    nonisolated private func rounded1(_ value: Double) -> Double {
-        (value * 10).rounded() / 10
     }
 
     // MARK: Private — kick classification
@@ -540,43 +517,16 @@ final class BeatDetector: @unchecked Sendable {
 
     // MARK: Private — publish
 
-    nonisolated private func publishBeatState(currentBPM: Double, recentBPMs: [Double], confidence: Double) {
-        let minBPM = sessionBPMs.min() ?? 0
-        let maxBPM = sessionBPMs.max() ?? 0
-        let avgBPM = sessionBPMs.isEmpty
-            ? 0
-            : rounded1(sessionBPMs.reduce(0, +) / Double(sessionBPMs.count))
-        let stability = computeStability()
-
-        // Cancella il timer precedente e riavvia il countdown di 3 s.
-        beatResetTask?.cancel()
-        beatResetTask = Task { @MainActor [weak state] in
-            try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled else { return }
-            state?.currentBPM = 0
-            state?.recentBPMs = []
-            state?.stability  = 0
-        }
-
+    /// Aggiorna `beatPosition` e `beatFlash` su @MainActor ad ogni onset valido.
+    /// La scrittura di BPM e statistiche di sessione è stata delegata a RhythmAnalyzer
+    /// (TBD-68), che riceve gli onset tramite `onOnset`.
+    nonisolated private func publishOnsetToState(rms: Float) {
         Task { @MainActor [weak state] in
-            guard let state, !state.tapOverrideActive else { return }
-            // EMA con α adattivo basato sulla confidenza ritmica:
-            //   α = 0.85 a confidenza 0 (post-fill, bassa) → aggiornamento rapido al nuovo tempo
-            //   α = 0.60 a confidenza 1 (ritmo stabile) → smorzamento dei picchi transitori
-            // Questo previene il freeze su numeri tondi (es. 120.0): dopo un fill la confidenza
-            // scende, α sale, e il sistema si aggiorna rapidamente al BPM reale.
-            let alpha = 0.85 - 0.25 * confidence
-            let prev = state.currentBPM
-            state.currentBPM = prev > 0 ? rounded1(alpha * currentBPM + (1 - alpha) * prev) : currentBPM
-            state.recentBPMs = recentBPMs
-            state.minBPM     = minBPM
-            state.maxBPM     = maxBPM
-            state.avgBPM     = avgBPM
-            state.stability  = stability
+            guard let state else { return }
             state.beatPosition = (state.beatPosition + 1) % 4
-            state.beatFlash  = true
+            state.beatFlash    = true
             try? await Task.sleep(for: .milliseconds(100))
-            state.beatFlash  = false
+            state.beatFlash    = false
         }
     }
 }
