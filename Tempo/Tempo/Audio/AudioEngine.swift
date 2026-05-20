@@ -153,6 +153,7 @@ final class AudioEngine: AudioBufferProvider, @unchecked Sendable {
     private let ringBuffer: SPSCRingBuffer
 
     nonisolated(unsafe) private let drainBuffer: UnsafeMutablePointer<Float>
+    nonisolated(unsafe) private let fftBuffer:   UnsafeMutablePointer<Float>
     nonisolated(unsafe) private var handlerPCMBuffer: AVAudioPCMBuffer?
     nonisolated(unsafe) private var captureHandler: ((AVAudioPCMBuffer) -> Void)?
     nonisolated(unsafe) private var notificationObservers: [NSObjectProtocol] = []
@@ -184,9 +185,11 @@ final class AudioEngine: AudioBufferProvider, @unchecked Sendable {
         self.state = state
 
         ringBuffer  = SPSCRingBuffer(capacity: AudioEngine.ringCapacity)
-        drainBuffer = UnsafeMutablePointer<Float>.allocate(
-            capacity: Int(AudioEngine.tapBufferSize))
-        drainBuffer.initialize(repeating: 0, count: Int(AudioEngine.tapBufferSize))
+        let bufSize = Int(AudioEngine.tapBufferSize)
+        drainBuffer = UnsafeMutablePointer<Float>.allocate(capacity: bufSize)
+        drainBuffer.initialize(repeating: 0, count: bufSize)
+        fftBuffer   = UnsafeMutablePointer<Float>.allocate(capacity: bufSize)
+        fftBuffer.initialize(repeating: 0, count: bufSize)
 
         let fftSz    = AudioEngine.fftSize
         let binCount = AudioEngine.fftBinCount
@@ -206,6 +209,7 @@ final class AudioEngine: AudioBufferProvider, @unchecked Sendable {
         if let lp  = lpSetup  { vDSP_biquad_DestroySetup(lp) }
         if let fft = fftSetup { vDSP_destroy_fftsetup(fft) }
         drainBuffer.deallocate()
+        fftBuffer.deallocate()
     }
 
     // MARK: AudioBufferProvider
@@ -337,17 +341,21 @@ final class AudioEngine: AudioBufferProvider, @unchecked Sendable {
             let now = CFAbsoluteTimeGetCurrent()
             guard now - lastEnergyTime >= AudioEngine.energyThrottleInterval,
                   read >= AudioEngine.fftSize else { continue }
-            computeAndPublishEnergy(sampleCount: read, timestamp: now)
+            fftBuffer.update(from: drainBuffer, count: read)
+            computeAndPublishEnergy(buffer: fftBuffer, sampleCount: read, timestamp: now)
         }
     }
 
     /// Computes 46 FFT energy bands (full spectrum) and kick-drum band energy (40–200 Hz).
     /// All buffers are pre-allocated; no heap allocation in this path.
-    nonisolated private func computeAndPublishEnergy(sampleCount: Int, timestamp: Double) {
+    /// `buffer` must be a caller-owned snapshot — it must not alias `drainBuffer`.
+    nonisolated private func computeAndPublishEnergy(
+        buffer: UnsafePointer<Float>, sampleCount: Int, timestamp: Double
+    ) {
         guard let fft = fftSetup else { return }
 
         // Step 1 — Apply Hann window to the first fftSize samples.
-        vDSP_vmul(drainBuffer, 1, &hannWindow, 1, &fftWorkBuffer, 1,
+        vDSP_vmul(buffer, 1, &hannWindow, 1, &fftWorkBuffer, 1,
                   vDSP_Length(AudioEngine.fftSize))
 
         // Steps 2–4 — Pack into split complex, run FFT, compute magnitudes.
