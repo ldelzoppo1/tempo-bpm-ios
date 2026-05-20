@@ -70,14 +70,23 @@ Conseguenze pratiche:
 
 Se in futuro si volesse aumentare la sensibilità al kick, una strada è passare ad `AVAudioSession.Category.measurement` — ma richiede un impatto sulla latenza audio da valutare.
 
-### Acustica da palco vs. sala prove vs. ascolto casuale
+### Modello d'uso — premessa fondamentale
 
-| Contesto | Caratteristiche | Modalità consigliata |
-|----------|----------------|----------------------|
-| Batterista solo (sala prove) | Segnale diretto, kick dominante, poco riverbero | SOLO |
-| Batterista su palco (amplificazione) | Monitor, cross-talk da altri strumenti, compressione | SOLO o LIVE |
-| Ascolto da speaker (live venue) | Mix compresso, kick spesso sottolineato da PA | LIVE |
-| Registrazione compressa (mp3, streaming) | Transienti smussati, livelli normalizzati | LIVE |
+**Il telefono è sempre nelle vicinanze del kit del batterista.** L'utente è il batterista stesso, non un ascoltatore distante. Il microfono è sempre in posizione near-field rispetto alla batteria: la cassa è il segnale diretto dominante in entrambe le modalità.
+
+Le due modalità non descrivono la distanza dalla fonte sonora, ma il contesto ambientale attorno al kit:
+
+| Modalità | Contesto | Sfida principale | Caratteristiche del segnale al mic |
+|----------|---------|-----------------|-----------------------------------|
+| **SOLO** | Sala prove, batterista da solo | Risonanza della sala, standing waves, nessun altro strumento | Kick dominante, noise floor basso, rapporto S/N alto |
+| **LIVE** | Palco con altri strumentisti | Noise floor alto: monitor laterali, ampli basso, vibrazioni palco, riverbero PA | Kick ancora dominante al mic, ma noise floor elevato |
+
+**Conseguenza algoritmica critica**: in entrambe le modalità il kick è il segnale più forte nella posizione del microfono. In modalità LIVE il problema non è un kick debole o compresso, ma un **noise floor significativamente più alto**. Questo significa che:
+- `minimumOnsetRms` è il parametro più critico in LIVE (gate contro il rumore del palco)
+- La discriminazione kick/non-kick è ancora possibile perché il kick è near-field
+- Lo scenario "ascolto da speaker lontano" o "registrazione MP3" **non è un use case di questa app**
+
+### Standing waves — sala prove
 
 ### Standing waves — rischio in sale prove piccole
 
@@ -99,7 +108,7 @@ Le standing waves producono un **ronzio stazionario a bassa frequenza** che si a
 - La soglia adattiva si alza → kick deboli vengono mancati
 - In casi estremi: il ronzio può superare la soglia e generare onset fantasma
 
-**Mitigazione attuale**: `energyWindowMaxSize = 64` buffer (~3s) → la baseline si adatta lentamente, ma il ronzio stazionario viene incluso nella media. Non c'è un fix perfetto a livello software; l'utente deve allontanarsi dalla parete o usare la modalità LIVE.
+**Mitigazione attuale**: `energyWindowMaxSize = 64` buffer (~3s) → la baseline si adatta lentamente, ma il ronzio stazionario viene incluso nella media. Non c'è un fix perfetto a livello software; il consiglio pratico è allontanarsi dalla parete risonante o posizionare il telefono sulla batteria stessa (superficie che isola dalla trasmissione del suono attraverso il pavimento).
 
 ### Decadimento della cassa (decay / resonance)
 
@@ -131,7 +140,7 @@ Usa questa tabella come **primo punto di accesso** quando ricevi una segnalazion
 | Nessun onset dopo 5+ colpi forti | `minimumOnsetRms` troppo alto per il contesto | Abbassare `minimumOnsetRms` (es. 0.040 → 0.020). Testare in ambiente silenzioso. |
 | Onset rilevati ma BPM = 0 | Meno di 2 intervalli validi nella rolling window | Normale durante il warm-up (primi 2 beat). Se persiste, outlier rejection troppo aggressivo. |
 | Kick non passa il kick filter | `kickRatioThreshold` troppo alto per il mic/contesto | Abbassare (es. 0.35 → 0.28). Verificare con `--verbose` che `kickRatio` sia calcolato. |
-| Solo mode non rileva su mix compresso | Il segnale filtrato HP+LP è troppo livellato — flux più informativo | Passare a modalità LIVE. |
+| SOLO non rileva con altri strumenti sul palco | Noise floor alto dal palco alza la baseline → kick non supera la soglia | Passare a modalità LIVE: nessun kick filter, onset detection più reattiva al transiente diretto. |
 
 ### Falsi positivi (onset non voluti)
 
@@ -231,8 +240,9 @@ Prima di cambiare un parametro, leggi la riga corrispondente. Ogni parametro ha 
 ### Quando non toccare l'algoritmo
 
 - Se il comportamento è corretto ma l'utente non lo riconosce (es. octave correction su half-time feel)
-- Se il problema è nel contesto (stanza risonante, mic coperto) — non nel codice
+- Se il problema è nel contesto fisico (stanza risonante, mic coperto, standing wave) — non nel codice
 - Se la variazione BPM è < 5 BPM su ritmo stabile — è normale anche con parametri ottimali
+- Se il caso d'uso è fuori dal perimetro dell'app: ascolto da lontano, registrazioni MP3, musica in streaming. L'app è progettata per il batterista con il telefono vicino al kit — il kick deve essere il segnale diretto dominante nel mic.
 
 ---
 
