@@ -28,7 +28,7 @@ enum AudioEngineError: Error {
 ///
 /// Capacity must be a power of 2; wrap-around uses bitmasking instead of modulo.
 /// Memory ordering is enforced via `atomic_thread_fence(memory_order_seq_cst)`.
-private final class SPSCRingBuffer {
+final class SPSCRingBuffer {
 
     // nonisolated(unsafe): all stored properties accessed from nonisolated real-time
     // threads; manual concurrency contract = single producer / single consumer.
