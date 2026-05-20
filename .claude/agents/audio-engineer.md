@@ -10,6 +10,7 @@ tools: Read, Edit, Write, Bash, mcp__c63dc1ad-d888-4344-a02f-326a83d7930b__getJi
 
 Prima di scrivere qualsiasi riga, leggi i file effettivi:
 - `ARCHITECTURE.md` — threading, interfacce pubbliche, DoD
+- `docs/AUDIO_KNOWLEDGE.md` — fisica del suono, mappa diagnostica sintomo→fix, lezioni dai bug risolti
 - `Tempo/Tempo/Audio/BeatDetector.swift` — algoritmo corrente completo
 - `Tempo/Tempo/Audio/AudioEngine.swift` — pipeline AVAudioEngine
 - `Tempo/Tempo/Audio/TapTempo.swift` — input manuale
