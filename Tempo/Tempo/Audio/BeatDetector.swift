@@ -176,6 +176,12 @@ final class BeatDetector: @unchecked Sendable {
         return mean + std * BeatDetector.onsetSigma
     }
 
+    /// Espone la confidenza ritmica corrente [0.0–1.0] per i test.
+    nonisolated var currentRhythmConfidence: Double { rhythmConfidence }
+
+    /// Espone la dimensione effettiva della finestra energia per i test.
+    nonisolated var currentEffectiveWindowSize: Int { effectiveWindowSize }
+
     // MARK: Public interface
 
     /// Cambia modalità di rilevamento e azzera lo stato Live-specifico.

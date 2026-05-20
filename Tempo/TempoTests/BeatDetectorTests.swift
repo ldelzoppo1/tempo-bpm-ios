@@ -851,4 +851,126 @@ final class BeatDetectorTests: XCTestCase {
         XCTAssertEqual(state.currentBPM, 0,
                        "Threshold guard must prevent onset when energy window history is all-zero; got \(state.currentBPM)")
     }
+
+    // MARK: - ST8: rhythmConfidence and effectiveWindowSize
+
+    /// TC33 — rhythmConfidence rises after a sequence of valid beats at 120 BPM.
+    func test_rhythmConfidence_risesAfterValidBeats() async {
+        let state = BeatState()
+        let clock = FakeClock()
+        let detector = BeatDetector(state: state, now: clock.now)
+
+        warmUp(detector, rms: 0.05, count: 25)
+
+        let pulse = makePCMBuffer(rms: 0.5)
+
+        // Inject 5 bursts at 0.5s intervals (120 BPM).
+        for i in 0..<5 {
+            clock.t = 1000.0 + Double(i) * 0.5
+            detector.process(buffer: pulse)
+        }
+
+        await drainMainActor()
+        XCTAssertGreaterThan(detector.currentRhythmConfidence, 0.3,
+                             "La confidenza deve superare 0.3 dopo 5 beat validi consecutivi; got \(detector.currentRhythmConfidence)")
+    }
+
+    /// TC34 — rhythmConfidence drops after an outlier interval.
+    func test_rhythmConfidence_fallsAfterOutlier() async {
+        let state = BeatState()
+        let clock = FakeClock()
+        let detector = BeatDetector(state: state, now: clock.now)
+
+        warmUp(detector, rms: 0.05, count: 25)
+
+        let pulse = makePCMBuffer(rms: 0.5)
+
+        // Inject 4 bursts at 0.5s intervals to stabilise.
+        for i in 0..<4 {
+            clock.t = 1000.0 + Double(i) * 0.5
+            detector.process(buffer: pulse)
+        }
+
+        await drainMainActor()
+        let baseConfidence = detector.currentRhythmConfidence
+
+        // Inject 1 burst with a 2.0s advance — interval far outside ±13% outlier range.
+        clock.t += 2.0
+        detector.process(buffer: pulse)
+
+        await drainMainActor()
+        XCTAssertLessThan(detector.currentRhythmConfidence, baseConfidence,
+                          "Un outlier deve abbassare rhythmConfidence; base=\(baseConfidence), got \(detector.currentRhythmConfidence)")
+    }
+
+    /// TC35 — effectiveWindowSize is 64 without a known BPM and shrinks once BPM is established.
+    func test_effectiveWindowSize_largerAtLowBPM() async {
+        let state = BeatState()
+        let clock = FakeClock()
+        let detector = BeatDetector(state: state, now: clock.now)
+
+        // Without any warm-up or beats, effectiveWindowSize must equal energyWindowMaxSize (64).
+        XCTAssertEqual(detector.currentEffectiveWindowSize, 64,
+                       "Without known BPM, effectiveWindowSize must be 64 (energyWindowMaxSize)")
+
+        warmUp(detector, rms: 0.05, count: 25)
+
+        let pulse = makePCMBuffer(rms: 0.5)
+
+        // Inject 5 bursts at 0.5s intervals to establish ~120 BPM.
+        for i in 0..<5 {
+            clock.t = 1000.0 + Double(i) * 0.5
+            detector.process(buffer: pulse)
+        }
+
+        await drainMainActor()
+        XCTAssertLessThan(detector.currentEffectiveWindowSize, 64,
+                          "Con BPM noto la finestra deve ridursi rispetto al massimo; got \(detector.currentEffectiveWindowSize)")
+        XCTAssertGreaterThanOrEqual(detector.currentEffectiveWindowSize, 22,
+                                    "La finestra non deve scendere sotto il minimo di 22; got \(detector.currentEffectiveWindowSize)")
+    }
+
+    /// TC36 — beatResetTask zeros currentBPM after 3 s of silence (real wait).
+    func test_beatResetTask_clearsBPMAfterSilence() async {
+        let state = BeatState()
+        let clock = FakeClock()
+        let detector = BeatDetector(state: state, now: clock.now)
+
+        warmUp(detector, rms: 0.05, count: 25)
+
+        let pulse = makePCMBuffer(rms: 0.5)
+
+        // Inject 4 bursts to produce a currentBPM > 0.
+        for i in 0..<4 {
+            clock.t = 1000.0 + Double(i) * 0.5
+            detector.process(buffer: pulse)
+        }
+
+        await drainMainActor()
+        XCTAssertGreaterThan(state.currentBPM, 0, "precondizione: currentBPM deve essere > 0 prima del silenzio")
+
+        // No more bursts — simulate silence. Wait 3.5s for the real Task.sleep(3s) to fire.
+        try? await Task.sleep(for: .seconds(3.5))
+
+        XCTAssertEqual(state.currentBPM, 0.0, accuracy: 0.1,
+                       "Dopo 3s di silenzio il beatResetTask deve azzerare currentBPM; got \(state.currentBPM)")
+    }
+
+    /// TC37 — Pulses with rms below minimumOnsetRms (0.040) must not trigger any onset.
+    func test_minimumOnsetRms_blocksLowEnergyOnset() async {
+        let state = BeatState()
+        let clock = FakeClock()
+        let detector = BeatDetector(state: state, now: clock.now)
+
+        warmUp(detector, rms: 0.005, count: 25)
+
+        // Inject burst with rms=0.035, below minimumOnsetRms=0.040.
+        let subThresholdBuf = makePCMBuffer(rms: 0.035)
+        clock.t += 0.5
+        detector.process(buffer: subThresholdBuf)
+
+        await drainMainActor()
+        XCTAssertEqual(state.currentBPM, 0.0,
+                       "RMS sotto 0.040 non deve scatenare onset; got \(state.currentBPM)")
+    }
 }

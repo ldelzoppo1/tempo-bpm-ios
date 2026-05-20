@@ -141,6 +141,29 @@ final class TapTempo {
 
 ---
 
+## Workflow obbligatorio per modifiche ai parametri DSP
+
+Prima di modificare qualsiasi costante in BeatDetector (onsetSigma, outlierThreshold,
+kickRatioThreshold, refractorySeconds, ecc.):
+
+1. **Esegui il simulatore** con un file audio di riferimento a BPM noto:
+   ```bash
+   python3 tools/beat_simulator.py --audio <file.wav> --known-bpm <N> --mode solo
+   ```
+2. **Usa la modalità calibrazione** per trovare i valori ottimali:
+   ```bash
+   python3 tools/beat_simulator.py --audio <file.wav> --known-bpm <N> --calibrate
+   ```
+3. **Documenta l'output** nel commento del subtask Jira: BPM rilevato, errore %,
+   parametri sweepati e valore scelto.
+4. **Solo dopo** modifica il codice Swift con i valori validati.
+
+Se non hai un file audio di riferimento, usa la track di test del repo
+(se presente in `tools/test_tracks/`) o segnala nel subtask Jira che la
+calibrazione è stata saltata e perché.
+
+---
+
 ## Vincoli architetturali
 
 - `Audio/` non importa mai `SwiftUI`
