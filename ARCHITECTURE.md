@@ -4,39 +4,49 @@ Documento di riferimento per tutti gli agenti. Definisce le scelte architettural
 
 ---
 
+## Struttura del progetto
+
+Il progetto Xcode si trova in `Tempo/Tempo.xcodeproj`. Il codice sorgente è in `Tempo/Tempo/`. I test sono in `Tempo/TempoTests/`.
+
+```
+Tempo/
+  Tempo.xcodeproj/
+  Tempo/
+    Audio/
+      AudioEngine.swift       # pipeline AVAudioEngine, microfono, filtri, ring buffer
+      BeatDetector.swift      # onset detection, calcolo BPM, kick discrimination
+      TapTempo.swift          # input manuale, override con timeout
+    UI/
+      ContentView.swift       # root view, @Environment injection
+      BPMPanel.swift
+      EnergyPanel.swift
+      StatsRow.swift
+      TapPanel.swift
+      CronoPanel.swift
+      TempoColors.swift       # token colore centralizzati
+    Models/
+      BeatState.swift         # stato condiviso @Observable
+    TempoApp.swift            # @main, wiring pipeline audio
+  TempoTests/
+    TempoTests.swift
+```
+
+---
+
 ## Decisioni architetturali
 
 | # | Decisione | Scelta | Alternativa scartata |
 |---|-----------|--------|----------------------|
 | 1 | Condivisione stato Audio→UI | `@Environment(BeatState.self)` | Singleton globale |
-| 2 | Threading audio | Queue DSP dedicata + `@MainActor` per UI | Aggiornamento diretto dal thread audio |
+| 2 | Threading audio | DSP queue dedicata + `@MainActor` per UI | Aggiornamento diretto dal thread audio |
 | 3 | Fusione Tap Tempo + microfono | Override con timeout (3s) | Media pesata |
-| 4 | Algoritmo beat detection | Energia in banda bassa 20–200 Hz | FFT full spectrum |
+| 4 | Algoritmo beat detection | Energia in banda bassa 30–250 Hz + kick discrimination | FFT full spectrum |
+| 5 | Soglia onset | Finestra scorrevole media + σ×0.7 (~1s) | EMA adattiva |
+| 6 | TapTempo ownership | Lazy @State in TapPanel — si auto-crea al primo tap | Iniettato dall'App |
 
 ---
 
 ## Struttura dei moduli
-
-```
-TempoBPM/
-  Audio/
-    AudioEngine.swift       # pipeline AVAudioEngine, microfono, filtri
-    BeatDetector.swift      # onset detection, calcolo BPM
-    TapTempo.swift          # input manuale, override con timeout
-  UI/
-    ContentView.swift       # root view, @Environment injection
-    BPMPanel.swift
-    EnergyPanel.swift
-    StatsRow.swift
-    TapPanel.swift
-    CronoPanel.swift
-  Models/
-    BeatState.swift         # stato condiviso @Observable
-TempoBPMTests/
-  AudioEngineTests.swift
-  BeatDetectorTests.swift
-  TapTempoTests.swift
-```
 
 **Regola di dipendenza**: `UI` dipende solo da `Models`. `Audio` dipende solo da `Models`. `UI` e `Audio` non si conoscono direttamente.
 
@@ -53,14 +63,15 @@ Audio ──writes──► BeatState ◄──reads── UI
 ```swift
 @Observable
 final class BeatState {
-    // Scritto da BeatDetector / TapTempo, letto da UI
+    // Scritto da BeatDetector, letto da UI
     var currentBPM: Double = 0
-    var recentBPMs: [Double] = []       // ultimi 4 valori (pills)
+    var recentBPMs: [Double] = []       // BPM individuali per le pills UI
     var minBPM: Double = 0
     var maxBPM: Double = 0
     var avgBPM: Double = 0
-    var stability: Double = 0           // 0.0–1.0, barra stabilità
-    var energyBands: [Float] = []       // ~46 valori per la waveform
+    var stability: Double = 0           // 0.0–1.0
+    var energyBands: [Float] = []       // 46 valori per la waveform
+    var kickEnergy: Float = 0           // RMS energia banda 40–200 Hz
     var isListening: Bool = false
     var beatFlash: Bool = false         // true per 100ms ad ogni beat
 
@@ -78,7 +89,7 @@ final class BeatState {
 **Regole di scrittura**:
 - `BeatState` viene scritto **solo sul `@MainActor`** (main thread)
 - `Audio` calcola sul DSP thread, poi chiama `Task { @MainActor in state.currentBPM = ... }`
-- La UI non scrive mai `currentBPM`, `recentBPMs`, `stability`, `energyBands`
+- La UI non scrive mai `currentBPM`, `recentBPMs`, `stability`, `energyBands`, `kickEnergy`
 
 ---
 
@@ -89,17 +100,17 @@ final class BeatState {
 │  Thread audio real-time (AVAudioEngine tap callback)    │
 │  • Lettura buffer PCM                                   │
 │  • NESSUNA allocazione, NESSUN lock, NESSUNA ObjC call  │
-│  • Copia buffer in un ring buffer lock-free             │
+│  • Copia buffer in ring buffer lock-free                │
 └───────────────────┬─────────────────────────────────────┘
                     │ dati grezzi
                     ▼
 ┌─────────────────────────────────────────────────────────┐
 │  DSP DispatchQueue (serial, QoS: .userInteractive)      │
-│  • Filtro passa-basso 20–200 Hz (vDSP biquad)           │
+│  • Filtro HP@30Hz + LP@250Hz (vDSP biquad)              │
 │  • Calcolo energia RMS (vDSP_rmsqv)                     │
-│  • Onset detection + soglia adattiva                    │
+│  • Onset detection + kick discrimination                │
 │  • Calcolo BPM (media mobile ultimi 4 onset)            │
-│  • Calcolo bande energia per waveform                   │
+│  • Calcolo 46 bande energia per waveform                │
 └───────────────────┬─────────────────────────────────────┘
                     │ solo quando c'è un beat o ogni ~60ms
                     ▼
@@ -110,31 +121,24 @@ final class BeatState {
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Frequenza aggiornamenti UI**:
-- `currentBPM`, `recentBPMs`, `stability`: ad ogni beat rilevato
-- `energyBands`: ogni ~60ms (≈16 fps, sufficiente per la waveform animata)
-- `beatFlash`: `true` ad ogni beat, ritorna `false` dopo 100ms
-
 ---
 
-## Pipeline audio (TBD-1)
+## Pipeline audio
 
 ```
 Microfono (44.1 kHz, mono)
     │
     ▼ AVAudioEngine inputNode tap (bufferSize: 2048)
     │
-    ▼ Copia in ring buffer (lock-free, sul thread real-time)
+    ▼ Ring buffer lock-free (SPSC, capacità 4×bufferSize)
     │
-    ▼ DSP Queue legge il ring buffer
+    ▼ DSP Queue
     │
-    ├─► Filtro DC offset (passa-alto > 20 Hz, vDSP biquad)
+    ├─► Filtro HP@30Hz + LP@250Hz (vDSP biquad) → buffer filtrato
     │
-    ├─► Filtro passa-basso 200 Hz (isola banda kick drum, vDSP biquad)
+    ├─► Calcolo RMS energia (vDSP_rmsqv) → onset detection
     │
-    ├─► Calcolo RMS energia (vDSP_rmsqv) → per onset detection
-    │
-    └─► Calcolo 46 bande energia (vDSP_desamp) → per waveform UI
+    └─► Calcolo 46 bande energia (downsampling) → waveform UI
 ```
 
 **Configurazione AVAudioSession**:
@@ -148,133 +152,132 @@ ioBufferDuration: 0.005  // ~5ms latenza
 
 ---
 
-## Algoritmo beat detection (TBD-2)
+## Algoritmo beat detection
 
 ```
-energia RMS corrente
+1. RMS buffer corrente
         │
         ▼
-  energia > soglia × 1.5 ?
-        │
-       YES → onset rilevato
+2. Aggiorna finestra scorrevole energia (~22 campioni, ~1s)
         │
         ▼
-  Δt dall'onset precedente → intervallo in millisecondi
+3. Soglia = media_finestra + std_finestra × 0.7
         │
         ▼
-  40 BPM < (60000 / Δt) < 220 BPM ?  → se no, scarta
+4. RMS > soglia  AND  soglia > 0.001 ?
         │
        YES
         │
         ▼
-  buffer ultimi 4 intervalli → media → BPM corrente
+5. Kick discrimination: LP@100Hz → kickRMS / totalRMS ≥ 0.28 ?
+        │
+       YES → onset confermato
         │
         ▼
-  aggiorna soglia adattiva:
-  soglia = soglia × 0.9 + energiaCorrente × 0.1
+6. Refrattario: Δt ≥ 300ms dal precedente onset ?
+        │
+       YES
+        │
+        ▼
+7. Outlier rejection: |intervallo - mediana_ultimi_N| / mediana ≤ 40% ?
+        │
+       YES
+        │
+        ▼
+8. Rolling window ultimi 4 intervalli → media → BPM
+        │
+        ▼
+9. Pubblica su BeatState via @MainActor
+        │
+        ▼
+10. Avvia/riavvia timer 3s: se nessun onset arriva, azzera currentBPM
 ```
 
-**Parametri configurabili** (costanti in `BeatDetector`):
+**Parametri** (costanti in `BeatDetector`):
 ```swift
-static let onsetMultiplier: Float = 1.5   // soglia = media × 1.5
-static let adaptiveAlpha: Float = 0.1     // velocità adattamento soglia
-static let bpmWindowSize: Int = 4         // media mobile ultimi N beat
-static let bpmMin: Double = 40
-static let bpmMax: Double = 220
-static let refractoryMs: Double = 200     // minimo tra due onset (anti-rimbalzo)
+static var onsetSigma: Float      = 0.7    // soglia = media + std × onsetSigma
+static var energyWindowSize: Int  = 22     // campioni finestra ~1s
+static var refractorySeconds: Double = 0.300
+static var maxIntervalSeconds: Double = 2.000
+static var outlierThreshold: Double  = 0.40
+static var bpmWindowSize: Int     = 4
+static var kickRatioThreshold: Float = 0.28
 ```
 
 ---
 
-## Tap Tempo — override con timeout (TBD-5)
+## Tap Tempo
 
 ```
-Utente tappa
+Utente tappa TapPanel
     │
     ▼
-TapTempo registra timestamp (CFAbsoluteTimeGetCurrent())
+TapPanel.button action → TapTempo.tap()   (lazy @State, creato al primo tap)
     │
     ▼
-≥ 2 tap → calcola media intervalli → tapBPM
+Pausa > 3s dall'ultimo tap? → azzera sequenza timestamps
+    │
+    ▼
+≥ 2 tap → BPM = 60 / media_intervalli (arrotondato a 1 decimale)
     │
     ▼
 BeatState.tapOverrideActive = true
 BeatState.currentBPM = tapBPM     ← sovrascrive il BPM da microfono
+BeatState.tapCount = N
     │
     ▼
-Timer di 3s si (ri)avvia ad ogni tap
+Task.sleep(3s) senza nuovi tap
     │
-    ▼ timer scaduto
-BeatState.tapOverrideActive = false
-BeatState.currentBPM = bpmDaMicrofono  ← ritorna al microfono
+    ▼
+BeatState.tapOverrideActive = false   ← BeatDetector riprende il controllo
 ```
 
-**Time provider iniettabile**: `TapTempo` accetta `now: @escaping () -> Double = CFAbsoluteTimeGetCurrent` nel suo `init`. Nei test, i test iniettano un clock controllato (`fakeClock`) al posto di `CFAbsoluteTimeGetCurrent`. Il `Task.sleep` interno del timer di 3s NON è controllabile da questo clock — il test del timeout usa `XCTestExpectation` con attesa reale.
-
-**Regola di fusione in `BeatDetector`**:
-- Se `tapOverrideActive == true` → non aggiornare `currentBPM` (il tap ha priorità)
+**Regola di fusione in `BeatDetector.publishBeatState`**:
+- Se `tapOverrideActive == true` → non aggiornare `currentBPM`
 - Se `tapOverrideActive == false` → aggiorna `currentBPM` normalmente
 
 ---
 
 ## Interfacce pubbliche tra moduli
 
-### AudioEngine (pubblico)
+### AudioEngine
 ```swift
 final class AudioEngine {
-    func start() throws
-    func stop()
+    init(state: BeatState)
+    func startCapture(handler: @escaping (AVAudioPCMBuffer) -> Void) throws
+    func stopCapture()
 }
 ```
 
-### BeatDetector (pubblico)
+### BeatDetector
 ```swift
 final class BeatDetector {
-    init(state: BeatState)
-    func process(buffer: AVAudioPCMBuffer)  // chiamato dalla DSP queue
-    func reset()                            // azzera stato sessione; chiamare solo dopo stopCapture()
-    var currentThreshold: Float { get }    // espone la soglia adattiva corrente per i test
+    init(state: BeatState, now: @escaping () -> Double = CFAbsoluteTimeGetCurrent)
+    func process(buffer: AVAudioPCMBuffer)  // chiamato dalla DSP queue, sincrono
+    func reset()
+    var currentThreshold: Float { get }    // esposto per i test
 }
 ```
 
-### TapTempo (pubblico)
+### TapTempo
 ```swift
 final class TapTempo {
-    init(state: BeatState, now: @escaping () -> Double = CFAbsoluteTimeGetCurrent)
-    func registerTap()         // chiamato dalla UI (main thread)
+    init(state: BeatState)
+    func tap()    // chiamato da TapPanel (main thread)
     func reset()
 }
 ```
 
-### ContentView — injection root
+### TempoApp — wiring
 ```swift
-@main struct TempoBPMApp: App {
+@main struct TempoApp: App {
     @State private var beatState = BeatState()
-    private let tapTempo: TapTempo
+    @State private var audioEngine: AudioEngine?
+    @State private var beatDetector: BeatDetector?
 
-    var body: some Scene {
-        WindowGroup {
-            ContentView(onTap: tapTempo.registerTap)
-                .environment(beatState)
-        }
-    }
+    // startAudioPipeline(), stopAudioPipeline(), toggleAudioPipeline()
+    // TapTempo è gestito da TapPanel internamente (lazy @State)
 }
-```
-
----
-
-## Protocolli per testabilità
-
-Il QA Agent usa questi protocolli per mockare le dipendenze nei test:
-
-```swift
-protocol AudioBufferProvider {
-    func startCapture(handler: @escaping (AVAudioPCMBuffer) -> Void) throws
-    func stopCapture()
-}
-
-// AudioEngine implementa AudioBufferProvider
-// MockAudioBufferProvider usato nei test
 ```
 
 ---
@@ -286,5 +289,5 @@ Ogni PR deve rispettare:
 - [ ] Nessuna chiamata UI dal thread audio o dalla DSP queue
 - [ ] Nessun `BeatDetector` o `TapTempo` che conosce tipi SwiftUI
 - [ ] Nessun `import SwiftUI` in `Audio/`
-- [ ] Ogni classe pubblica di `Audio/` è mockabile via protocollo
 - [ ] I parametri DSP sono costanti named, non magic numbers
+- [ ] Ogni modifica all'algoritmo è accompagnata da test in `Tempo/TempoTests/`

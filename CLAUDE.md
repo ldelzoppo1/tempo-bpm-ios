@@ -52,27 +52,31 @@ Orchestratore
 7. Git Agent committa con Conventional Commits e apre PR
 8. Orchestratore aggiorna Jira e verifica DoD
 
-## Struttura progetto (target)
+## Struttura progetto
+
+Il progetto Xcode è `Tempo/Tempo.xcodeproj`. Tutto il codice sorgente è in `Tempo/Tempo/`.
 
 ```
-TempoBPM/
-  Audio/
-    AudioEngine.swift        # AVAudioEngine pipeline, mic input, filtri, FFT
-    BeatDetector.swift       # onset detection, soglia adattiva, calcolo BPM
-    TapTempo.swift           # input manuale tap, media intervalli
-  UI/
-    ContentView.swift        # root view, layout principale
-    BPMPanel.swift           # display BPM grande, accent-bar, pills, dots, stabilità
-    EnergyPanel.swift        # waveform energia bassa frequenza
-    StatsRow.swift           # BPM min / max / avg
-    TapPanel.swift           # pulsante TAP + contatore
-    CronoPanel.swift         # orologio corrente + cronometro concerto
-  Models/
-    BeatState.swift          # stato condiviso @Observable
-TempoBPMTests/
-  AudioEngineTests.swift
-  BeatDetectorTests.swift
-  TapTempoTests.swift
+Tempo/
+  Tempo.xcodeproj/           # progetto Xcode — unica fonte di verità
+  Tempo/
+    Audio/
+      AudioEngine.swift        # AVAudioEngine pipeline, mic input, filtri, ring buffer
+      BeatDetector.swift       # onset detection, kick discrimination, calcolo BPM
+      TapTempo.swift           # input manuale tap, media intervalli
+    UI/
+      ContentView.swift        # root view, layout principale
+      BPMPanel.swift           # display BPM grande, accent-bar, pills, dots, stabilità
+      EnergyPanel.swift        # waveform energia bassa frequenza
+      StatsRow.swift           # BPM min / max / avg
+      TapPanel.swift           # pulsante TAP + contatore (gestisce TapTempo internamente)
+      CronoPanel.swift         # orologio corrente + cronometro concerto
+      TempoColors.swift        # token colore centralizzati
+    Models/
+      BeatState.swift          # stato condiviso @Observable
+    TempoApp.swift             # @main, wiring pipeline audio
+  TempoTests/
+    TempoTests.swift           # test suite (da espandere)
 ```
 
 ## Architettura (sintesi)
@@ -81,7 +85,7 @@ Vedi `ARCHITECTURE.md` per tutti i dettagli. Punti chiave:
 - Stato condiviso via `@Environment(BeatState.self)` — mai singleton globale
 - Thread audio → DSP queue → `@MainActor`: nessuna UI update dal thread audio
 - Tap Tempo sovrascrive il BPM da microfono per 3s, poi ritorna automaticamente
-- Beat detection su energia banda 20–200 Hz (kick drum), non FFT full spectrum
+- Beat detection su energia banda 30–250 Hz (kick drum) con kick discrimination LP@100Hz
 - `Audio/` non importa SwiftUI; `UI/` non conosce AVAudioEngine
 
 ## Convenzioni
@@ -90,7 +94,7 @@ Vedi `ARCHITECTURE.md` per tutti i dettagli. Punti chiave:
 - **Nomi**: PascalCase per tipi, camelCase per variabili e funzioni
 - **Commenti**: solo quando il WHY non è ovvio dal codice
 - **Nessun** codice di compatibilità retroattiva non necessario
-- **Test**: obbligatori per ogni funzione pubblica di Audio/ e Models/
+- **Test**: in `Tempo/TempoTests/` — obbligatori per ogni funzione pubblica di `Audio/` e `Models/`
 - **Review**: nessun codice entra nel repo senza approvazione del Reviewer
 
 ## Design Figma — schermata principale
