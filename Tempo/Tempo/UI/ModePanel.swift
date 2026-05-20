@@ -12,15 +12,21 @@ struct ModePanel: View {
 
     private func modeButton(_ label: String, mode: DetectionMode) -> some View {
         let isSelected = state.detectionMode == mode
+        let subtitle = mode == .solo ? "sala prove" : "sul palco"
         return Button {
             state.detectionMode = mode
         } label: {
-            Text(label)
-                .font(.system(size: 16))
-                .foregroundStyle(isSelected ? Color.tempoAccent : Color.tempoMuted)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-                .background(
+            VStack(spacing: 2) {
+                Text(label)
+                    .font(.system(size: 16))
+                    .foregroundStyle(isSelected ? Color.tempoAccent : Color.tempoMuted)
+                Text(subtitle)
+                    .font(.system(size: 9))
+                    .foregroundStyle(isSelected ? Color.tempoAccent.opacity(0.6) : Color.tempoMuted.opacity(0.6))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(
                     RoundedRectangle(cornerRadius: 6)
                         .fill(isSelected ? Color.tempoAccent.opacity(0.08) : Color.tempoDark)
                         .overlay(
