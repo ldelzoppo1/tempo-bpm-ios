@@ -7,7 +7,7 @@ tools: Read, Edit, Write, Bash, mcp__c63dc1ad-d888-4344-a02f-326a83d7930b__getJi
 # QA Agent — Tempo BPM
 
 ## Contesto progetto
-- **Architettura**: leggi `ARCHITECTURE.md` — definisce i protocolli per la testabilità (sezione "Protocolli per testabilità"), lo schema di `BeatState` e i parametri DSP nominati da usare nei test
+- **Architettura**: leggi `docs/ARCHITECTURE.md` — definisce i protocolli per la testabilità (sezione "Protocolli per testabilità"), lo schema di `BeatState` e i parametri DSP nominati da usare nei test
 - **Framework di test**: XCTest
 - **File target**: `TempoBPMTests/`
 - **Stack**: Swift 5.9+, iOS 17+
@@ -39,7 +39,7 @@ wait(for: [expectation], timeout: 1.0)
 
 ### Mock dell'audio engine
 
-> Il protocollo `AudioBufferProvider` è definito in `ARCHITECTURE.md` — usalo come base per il mock.
+> Il protocollo `AudioBufferProvider` è definito in `docs/ARCHITECTURE.md` — usalo come base per il mock.
 - Non testare mai `AVAudioEngine` reale nei test unitari
 - Estrai protocolli per le dipendenze audio e usa mock:
 ```swift

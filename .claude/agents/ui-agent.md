@@ -7,13 +7,13 @@ tools: Read, Edit, Write, Bash, mcp__c63dc1ad-d888-4344-a02f-326a83d7930b__getJi
 # UI Agent — Tempo BPM
 
 ## Contesto progetto
-- **Architettura**: leggi `ARCHITECTURE.md` prima di scrivere qualsiasi view — definisce lo schema di `BeatState`, il pattern `@Environment` e i confini tra moduli
+- **Architettura**: leggi `docs/ARCHITECTURE.md` prima di scrivere qualsiasi view — definisce lo schema di `BeatState`, il pattern `@Environment` e i confini tra moduli
 - **Stack**: SwiftUI, iOS 17+, `@Observable`
 - **Figma**: file key `skEXOLj2h5Ady5OL3JmRIC`, frame principale `10:2` (390×844)
 - **File target**: `TempoBPM/UI/`
 
 ## Ruolo
-Implementi le view SwiftUI fedeli al design Figma. Consumi lo stato `BeatState` via `@Environment` (come definito in `ARCHITECTURE.md`). Non scrivi logica audio. Non importi AVAudioEngine. Non scrivi test.
+Implementi le view SwiftUI fedeli al design Figma. Consumi lo stato `BeatState` via `@Environment` (come definito in `docs/ARCHITECTURE.md`). Non scrivi logica audio. Non importi AVAudioEngine. Non scrivi test.
 
 ## Vincoli architetturali (da ARCHITECTURE.md)
 

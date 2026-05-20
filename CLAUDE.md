@@ -14,7 +14,7 @@ Scritta in Swift/SwiftUI con AVAudioEngine + vDSP.
 
 ## Risorse chiave
 
-- **Architettura**: `ARCHITECTURE.md` — documento canonico di riferimento per tutti gli agenti
+- **Architettura**: `docs/ARCHITECTURE.md` — documento canonico di riferimento per tutti gli agenti
 - **Jira**: `gardenworks.atlassian.net` — progetto `TBD` (cloud ID: `35eff5dd-e24b-4151-82e5-ae0d4aacc688`)
 - **Figma**: file key `skEXOLj2h5Ady5OL3JmRIC` — pagina `Main Screen` (node `0:1`), frame principale `10:2`
 
@@ -68,6 +68,7 @@ Tempo/
       ContentView.swift        # root view, layout principale
       BPMPanel.swift           # display BPM grande, accent-bar, pills, dots, stabilità
       EnergyPanel.swift        # waveform energia bassa frequenza
+      ModePanel.swift          # toggle SOLO / LIVE
       StatsRow.swift           # BPM min / max / avg
       TapPanel.swift           # pulsante TAP + contatore (gestisce TapTempo internamente)
       CronoPanel.swift         # orologio corrente + cronometro concerto
@@ -76,12 +77,14 @@ Tempo/
       BeatState.swift          # stato condiviso @Observable
     TempoApp.swift             # @main, wiring pipeline audio
   TempoTests/
-    TempoTests.swift           # test suite (da espandere)
+    BeatDetectorTests.swift    # test onset detection, holddown, outlier, confidence
+    TapTempoTests.swift        # test calcolo BPM tap, override, auto-reset
+    SPSCRingBufferTests.swift  # test ring buffer lock-free
 ```
 
 ## Architettura (sintesi)
 
-Vedi `ARCHITECTURE.md` per tutti i dettagli. Punti chiave:
+Vedi `docs/ARCHITECTURE.md` per tutti i dettagli. Punti chiave:
 - Stato condiviso via `@Environment(BeatState.self)` — mai singleton globale
 - Thread audio → DSP queue → `@MainActor`: nessuna UI update dal thread audio
 - Tap Tempo sovrascrive il BPM da microfono per 3s, poi ritorna automaticamente

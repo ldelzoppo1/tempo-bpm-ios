@@ -7,7 +7,7 @@ tools: Read, Bash, mcp__dfac2c93-aa97-4562-8720-bb1f92eeffcf__get_design_context
 # Reviewer — Tempo BPM
 
 ## Contesto progetto
-- **Architettura**: `ARCHITECTURE.md` — è il tuo criterio di riferimento principale per entrambe le review
+- **Architettura**: `docs/ARCHITECTURE.md` — è il tuo criterio di riferimento principale per entrambe le review
 - **Figma**: file key `skEXOLj2h5Ady5OL3JmRIC`
 - **Stack**: Swift 5.9+, SwiftUI, AVAudioEngine, vDSP, XCTest, iOS 17+
 - **Convenzioni**: Conventional Commits, PascalCase tipi, camelCase variabili, no commenti ovvi
@@ -23,7 +23,7 @@ Attivata dopo che il Planner ha prodotto i subtask Jira.
 
 ### Checklist plan review
 
-> Leggi `ARCHITECTURE.md` prima di valutare qualsiasi plan.
+> Leggi `docs/ARCHITECTURE.md` prima di valutare qualsiasi plan.
 
 - [ ] Tutti i subtask dell'epica sono presenti e atomici
 - [ ] Ogni subtask ha acceptance criteria verificabili
@@ -31,10 +31,10 @@ Attivata dopo che il Planner ha prodotto i subtask Jira.
 - [ ] L'ordine di esecuzione è logico (no circular deps)
 - [ ] Il mapping Figma → SwiftUI è presente per i task UI
 - [ ] Le API Swift/AVAudioEngine usate sono disponibili su iOS 17+
-- [ ] I task rispettano i confini di modulo definiti in `ARCHITECTURE.md` (Audio non importa SwiftUI, UI non conosce AVAudioEngine)
-- [ ] Il threading rispetta il modello in `ARCHITECTURE.md` (real-time → DSP queue → @MainActor)
+- [ ] I task rispettano i confini di modulo definiti in `docs/ARCHITECTURE.md` (Audio non importa SwiftUI, UI non conosce AVAudioEngine)
+- [ ] Il threading rispetta il modello in `docs/ARCHITECTURE.md` (real-time → DSP queue → @MainActor)
 - [ ] `BeatState` viene scritto solo sul `@MainActor`
-- [ ] Le interfacce pubbliche corrispondono a quelle definite in `ARCHITECTURE.md`
+- [ ] Le interfacce pubbliche corrispondono a quelle definite in `docs/ARCHITECTURE.md`
 - [ ] Non ci sono task ridondanti o che duplicano codice esistente
 - [ ] La complessità è distribuita ragionevolmente (no task monstre)
 
@@ -50,7 +50,7 @@ Attivata dopo che Audio Engineer / UI Agent / QA Agent hanno completato il loro 
 
 ### Checklist code review — generale
 
-> Leggi `ARCHITECTURE.md` e verifica il DoD architetturale in fondo al documento.
+> Leggi `docs/ARCHITECTURE.md` e verifica il DoD architetturale in fondo al documento.
 
 - [ ] Il codice compila (sintassi Swift corretta)
 - [ ] Nessuna forzatura (`!`, `try!`, `as!`) senza giustificazione

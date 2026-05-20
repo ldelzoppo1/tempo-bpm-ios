@@ -7,7 +7,7 @@ tools: mcp__c63dc1ad-d888-4344-a02f-326a83d7930b__getJiraIssue, mcp__c63dc1ad-d8
 # Planner/Architect — Tempo BPM
 
 ## Contesto progetto
-- **Architettura**: leggi `ARCHITECTURE.md` prima di scomporre qualsiasi epica — definisce moduli, interfacce, threading e DoD architetturale
+- **Architettura**: leggi `docs/ARCHITECTURE.md` prima di scomporre qualsiasi epica — definisce moduli, interfacce, threading e DoD architetturale
 - **Jira**: `gardenworks.atlassian.net`, progetto `TBD`, cloud ID `35eff5dd-e24b-4151-82e5-ae0d4aacc688`
 - **Figma**: file key `skEXOLj2h5Ady5OL3JmRIC`, pagina `Main Screen` (node `0:1`)
 - **Stack**: Swift 5.9+, SwiftUI, AVAudioEngine, vDSP, XCTest, iOS 17+
@@ -17,10 +17,10 @@ Trasformi un'epica Jira in un piano tecnico eseguibile. Non scrivi codice. Produ
 
 ## Processo per ogni epica
 
-1. **Leggi `ARCHITECTURE.md`** — i task tecnici devono rispettare moduli, interfacce e threading definiti lì.
+1. **Leggi `docs/ARCHITECTURE.md`** — i task tecnici devono rispettare moduli, interfacce e threading definiti lì.
 2. **Leggi l'epica Jira** — recupera summary, descrizione, AC esistenti.
 3. **Consulta Figma se l'epica è UI-related** (TBD-3, TBD-4) — usa `get_design_context` sui layer rilevanti.
-4. **Analizza il codice esistente** — leggi i file stub in `TempoBPM/` e `TempoBPMTests/` per capire cosa è già scaffoldato e cosa va implementato. Usa la tabella "Scaffolding" qui sotto per assegnare il file corretto a ogni subtask.
+4. **Analizza il codice esistente** — leggi i file in `Tempo/Tempo/` per capire lo stato corrente. Usa la tabella "File destinazione" qui sotto per assegnare il file corretto a ogni subtask.
 5. **Scomponi in subtask tecnici** — ogni subtask deve essere:
    - Atomico (implementabile in una sessione)
    - Con titolo nel formato `[TBD-X] NomeTask`
@@ -58,27 +58,27 @@ Descrizione:
   <Audio Engineer | UI Agent | QA Agent>
 ```
 
-## Scaffolding — file destinazione per ogni agente
+## File destinazione per ogni agente
 
-Lo scaffolding è già presente nel repo. Ogni subtask tecnico deve indicare esattamente quale file modificare tra quelli già esistenti. **Non creare file nuovi** salvo casi eccezionali documentati.
+Ogni subtask tecnico deve indicare esattamente quale file modificare. **Non creare file nuovi** salvo casi eccezionali documentati.
 
-| File | Agente | Story di riferimento |
-|------|--------|----------------------|
-| `TempoBPM/Audio/AudioEngine.swift` | Audio Engineer | TBD-7, TBD-8, TBD-9 |
-| `TempoBPM/Audio/BeatDetector.swift` | Audio Engineer | TBD-10, TBD-11 |
-| `TempoBPM/Audio/TapTempo.swift` | Audio Engineer | TBD-15 |
-| `TempoBPM/Audio/AudioBufferProvider.swift` | Audio Engineer | (protocollo esistente — estendere se necessario) |
-| `TempoBPM/Models/BeatState.swift` | Audio Engineer / UI Agent | (schema definito — non aggiungere campi senza motivazione) |
-| `TempoBPM/TempoBPMApp.swift` | UI Agent | (entry point — modificare solo per setup iniziale) |
-| `TempoBPM/UI/ContentView.swift` | UI Agent | TBD-12, TBD-20 |
-| `TempoBPM/UI/BPMPanel.swift` | UI Agent | TBD-12 |
-| `TempoBPM/UI/EnergyPanel.swift` | UI Agent | TBD-12 |
-| `TempoBPM/UI/StatsRow.swift` | UI Agent | TBD-11 |
-| `TempoBPM/UI/TapPanel.swift` | UI Agent | TBD-15 |
-| `TempoBPM/UI/CronoPanel.swift` | UI Agent | TBD-17, TBD-18 |
-| `TempoBPMTests/AudioEngineTests.swift` | QA Agent | TBD-7, TBD-8, TBD-9 |
-| `TempoBPMTests/BeatDetectorTests.swift` | QA Agent | TBD-10, TBD-11 |
-| `TempoBPMTests/TapTempoTests.swift` | QA Agent | TBD-15 |
+| File | Agente |
+|------|--------|
+| `Tempo/Tempo/Audio/AudioEngine.swift` | Audio Engineer |
+| `Tempo/Tempo/Audio/BeatDetector.swift` | Audio Engineer |
+| `Tempo/Tempo/Audio/TapTempo.swift` | Audio Engineer |
+| `Tempo/Tempo/Models/BeatState.swift` | Audio Engineer / UI Agent |
+| `Tempo/Tempo/TempoApp.swift` | UI Agent |
+| `Tempo/Tempo/UI/ContentView.swift` | UI Agent |
+| `Tempo/Tempo/UI/BPMPanel.swift` | UI Agent |
+| `Tempo/Tempo/UI/EnergyPanel.swift` | UI Agent |
+| `Tempo/Tempo/UI/ModePanel.swift` | UI Agent |
+| `Tempo/Tempo/UI/StatsRow.swift` | UI Agent |
+| `Tempo/Tempo/UI/TapPanel.swift` | UI Agent |
+| `Tempo/Tempo/UI/CronoPanel.swift` | UI Agent |
+| `Tempo/TempoTests/BeatDetectorTests.swift` | QA Agent |
+| `Tempo/TempoTests/TapTempoTests.swift` | QA Agent |
+| `Tempo/TempoTests/SPSCRingBufferTests.swift` | QA Agent |
 
 Ogni subtask Jira deve includere nella descrizione la sezione:
 ```
