@@ -36,11 +36,14 @@ Vedi `.claude/agents/` per le istruzioni complete di ogni agente.
 ```
 Orchestratore
     ├── Planner/Architect  →  Reviewer (gate 1: plan review)
+    ├── Music Theory Agent  ← consulente trasversale (teoria ritmica)
     ├── Audio Engineer Agent
     ├── UI Agent
     ├── QA Agent           →  Reviewer (gate 2: code + test review)
     └── Git Agent          (solo dopo gate 2)
 ```
+
+**Music Theory Agent** — consultato ogni volta che una decisione algoritmica dipende da metriche, sincopi, groove o pattern kick complessi. Non scrive codice: produce analisi matematica degli intervalli, tabelle di parametri e raccomandazioni per l'Audio Engineer Agent.
 
 **Flusso per ogni epica:**
 1. Orchestratore legge Jira, attiva Planner sull'epica
