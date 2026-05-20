@@ -5,14 +5,23 @@ final class TapTempo {
     private weak var state: BeatState?
     private var timestamps: [Double] = []
     private var resetTask: Task<Void, Never>?
+    // Injectable clock — defaults to CFAbsoluteTimeGetCurrent so production behaviour
+    // is unchanged. Tests pass a FakeClock to control time deterministically.
+    private let now: () -> Double
 
-    init(state: BeatState) {
+    init(state: BeatState, now: @escaping () -> Double = CFAbsoluteTimeGetCurrent) {
         self.state = state
+        self.now = now
     }
 
     @MainActor func tap() {
-        let t = CFAbsoluteTimeGetCurrent()
-        if let last = timestamps.last, t - last > 3.0 { timestamps.removeAll() }
+        let t = now()
+        if let last = timestamps.last, t - last > 3.0 {
+            timestamps.removeAll()
+            state?.tapBPM = 0
+            state?.currentBPM = 0
+            state?.tapOverrideActive = false
+        }
         timestamps.append(t)
         if timestamps.count > 8 { timestamps.removeFirst() }
 
