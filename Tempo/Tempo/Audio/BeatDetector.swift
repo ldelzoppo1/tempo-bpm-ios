@@ -377,7 +377,7 @@ final class BeatDetector: @unchecked Sendable {
 
     nonisolated private func registerOnset(at time: Double) {
         // Gap > 2 s: pausa ritmica, azzera rolling window e azzera la confidenza.
-        if lastOnsetTime > 0 && time - lastOnsetTime > 2.0 {
+        if lastOnsetTime > 0 && time - lastOnsetTime > BeatDetector.maxIntervalSeconds {
             onsetIntervals.removeAll()
             rhythmConfidence = 0
         }
