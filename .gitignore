@@ -63,3 +63,10 @@ fastlane/test_output
 
 # Claude Code agent worktrees (temporary isolation directories)
 .claude/worktrees/
+
+# File audio — non committare materiale protetto da copyright
+tools/*.mp3
+tools/*.m4a
+tools/*.wav
+tools/*.aac
+tools/*.flac
