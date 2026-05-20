@@ -17,6 +17,7 @@ final class BeatState {
     var kickEnergy: Float = 0           // RMS energy in 40–200 Hz band
     var isListening: Bool = false
     var beatFlash: Bool = false         // true for 100 ms per beat
+    var beatPosition: Int = 0          // 0–3, cycles on every detected onset
 
     // Written by TapTempo
     var tapCount: Int = 0

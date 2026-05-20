@@ -15,7 +15,7 @@ struct BPMPanel: View {
                 bpmDisplay
                 if !state.recentBPMs.isEmpty { recentPills }
                 stabilityBar
-                rhythmDots
+                beatDots
             }
             .padding(12)
         }
@@ -101,14 +101,15 @@ struct BPMPanel: View {
         }
     }
 
-    private var rhythmDots: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<8, id: \.self) { i in
+    private var beatDots: some View {
+        HStack(spacing: 12) {
+            ForEach(0..<4, id: \.self) { i in
                 Circle()
-                    .fill(i % 2 == 0 ? Color.tempoMuted : Color.tempoAmber)
-                    .frame(width: 8, height: 8)
-                    .scaleEffect(state.beatFlash && i == 0 ? 1.3 : 1.0)
-                    .animation(.easeOut(duration: 0.08), value: state.beatFlash)
+                    .fill(i == state.beatPosition % 4 && state.currentBPM > 0
+                          ? Color.tempoAccent
+                          : Color.tempoMuted)
+                    .frame(width: 10, height: 10)
+                    .animation(.easeOut(duration: 0.1), value: state.beatPosition)
             }
         }
     }

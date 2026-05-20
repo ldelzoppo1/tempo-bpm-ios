@@ -570,6 +570,7 @@ final class BeatDetector: @unchecked Sendable {
             state.maxBPM     = maxBPM
             state.avgBPM     = avgBPM
             state.stability  = stability
+            state.beatPosition = (state.beatPosition + 1) % 4
             state.beatFlash  = true
             try? await Task.sleep(for: .milliseconds(100))
             state.beatFlash  = false
