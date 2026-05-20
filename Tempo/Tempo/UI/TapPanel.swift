@@ -23,7 +23,7 @@ struct TapPanel: View {
                 tapTempo?.tap()
             } label: {
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(.ultraThinMaterial)
+                    .fill(Color.tempoPanel)
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
                             .fill(
@@ -51,7 +51,7 @@ struct TapPanel: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .background(Color.tempoPanel, in: RoundedRectangle(cornerRadius: 10))
         .overlay(
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.tempoBorder, lineWidth: 1)

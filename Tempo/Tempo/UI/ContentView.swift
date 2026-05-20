@@ -84,7 +84,7 @@ struct ContentView: View {
             .padding(.vertical, 14)
             .background(
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(.ultraThinMaterial)
+                    .fill(Color.tempoPanel)
                     .overlay(
                         RoundedRectangle(cornerRadius: 10)
                             .fill(

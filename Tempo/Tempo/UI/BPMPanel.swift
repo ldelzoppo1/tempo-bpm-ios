@@ -19,7 +19,7 @@ struct BPMPanel: View {
             }
             .padding(12)
         }
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .background(Color.tempoPanel, in: RoundedRectangle(cornerRadius: 10))
         .overlay(
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.tempoBorder, lineWidth: 1)

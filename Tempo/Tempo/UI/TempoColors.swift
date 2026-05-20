@@ -3,9 +3,9 @@ import SwiftUI
 extension Color {
     // Background
     static let tempoBg     = Color(red: 9/255,   green: 14/255,  blue: 28/255)   // #090E1C — midnight navy
-    static let tempoPanel  = Color(.sRGB, red: 1, green: 1, blue: 1, opacity: 0.06)  // glass panel fallback
+    static let tempoPanel  = Color(red: 19/255,  green: 27/255,  blue: 46/255)   // #131B2E — dark panel (solid, no material)
     static let tempoBorder = Color(.sRGB, red: 1, green: 1, blue: 1, opacity: 0.11)  // glass edge
-    static let tempoDark   = Color(.sRGB, red: 0, green: 0, blue: 0, opacity: 0.30)  // inner dark surface
+    static let tempoDark   = Color(red: 12/255,  green: 18/255,  blue: 32/255)   // #0C1220 — inner darker surface
     // Accents
     static let tempoAccent = Color(red: 255/255, green: 140/255, blue: 53/255)   // #FF8C35 — warm amber-orange
     static let tempoGreen  = Color(red: 48/255,  green: 209/255, blue: 88/255)   // #30D158 — Apple system green
