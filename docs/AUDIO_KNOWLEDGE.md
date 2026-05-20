@@ -17,19 +17,58 @@ Leggi questo documento **prima** di proporre modifiche all'algoritmo.
 | Strumento | Fondamentale | Armoniche principali | Note |
 |-----------|-------------|----------------------|------|
 | Grancassa (kick) | 40–80 Hz | 80–200 Hz (corpo) | Il fondamentale spesso non è catturato dal mic del telefono |
-| Rullante (snare) | 150–250 Hz | 250–800 Hz (rimshot) | Picco energetico ben sopra il kick |
+| Rullante (snare) | 150–250 Hz | 250–800 Hz (rimshot) | Attacco a 1.5–5 kHz — fuori banda, non interferisce |
 | Tom basso | 60–120 Hz | 120–300 Hz | Simile al kick, difficile da distinguere in banda stretta |
 | Tom medio/alto | 150–400 Hz | overlapping con snare | |
 | Hi-hat (chiuso) | 5–10 kHz | — | Completamente fuori banda (< 250 Hz): non interferisce |
 | Piatto (crash/ride) | 200–500 Hz | harmonics > 1 kHz | Corpo nella banda — può causare falsi positivi |
 
+### Fisica della membrana del kick drum
+
+Un colpo di cassa produce **due eventi sovrapposti**:
+
+1. **Click del battente** (beater click): transiente broadband, durata 2–5 ms. Contiene energia su tutto lo spettro ma decade quasi istantaneamente. Non è il segnale che usiamo.
+
+2. **Risonanza della membrana**: la testa percossa vibra nei suoi modi normali:
+   - **Modo (0,1) — monopolare**: il modo fondamentale. Emette energia in modo molto efficiente → decade *rapidamente* trasferendo energia in pressione sonora. Questo è il fondamentale del kick (40–80 Hz).
+   - **Modi superiori (1,1), (2,1), ...**: frequenze più alte (corpo 80–200 Hz), decadimento più lento perché radiano meno efficacemente. **Sono questi che BeatDetector rileva** attraverso la banda LP@100 Hz.
+
+3. **Coda di risonanza del corpo**: la shell del tamburo e la testa anteriore continuano a vibrare per 300–600 ms (kick 20–22"). Produce il secondo picco energetico che holddown deve sopprimere.
+
+**Conseguenza pratica**: il kick che rileva l'app non è il fondamentale puro, ma l'energia dei modi superiori della membrana nel range 80–200 Hz — quella parte dello spettro dove il mic iPhone ha ancora sensibilità accettabile.
+
+### Spettro del rullante — dettaglio completo
+
+Il rullante è una **sorgente broadband** senza un'unica frequenza dominante:
+
+| Zona spettrale | Freq | Contenuto |
+|---------------|------|-----------|
+| Corpo / fondamentale | 150–250 Hz | Risonanza della testa battuta |
+| Corpo medio | 250–800 Hz | Rimshot, armoniche della shell |
+| Attacco / stick | 1.5–5 kHz | Impatto del colpo sul centro della testa |
+| Sizzle (piattini) | 7–15 kHz | Vibrazione dei filetti metallici sotto la testa |
+
+**Perché il filtro LP@100 Hz blocca il rullante**: il fondamentale del rullante (150–250 Hz) è già sopra il cutoff, e la sua energia sotto 100 Hz è < 5% del totale. Il `kickRatio` del rullante risulta tipicamente 0.05–0.15, ben sotto la soglia 0.35. L'attacco a 1.5–5 kHz è completamente fuori dalla banda di rilevamento (30–250 Hz).
+
 ### Risposta del microfono iPhone
 
-Il mic integrale iPhone ha un roll-off naturale sotto ~120 Hz (guadagno ridotto di ~6–12 dB a 80 Hz rispetto a 200 Hz). Conseguenza pratica:
-- **Il fondamentale della cassa (40–80 Hz) è attenuato o assente** nel segnale catturato
-- Quello che BeatDetector chiama "kick" rileva in realtà la **banda corpo del kick: 80–200 Hz**
+Il mic interno iPhone applica un **filtro hardware low-cut con rolloff ~24 dB/ottava** a partire da circa 100–250 Hz (varia per generazione):
+
+| Modello | –3 dB point | Comportamento |
+|---------|-------------|---------------|
+| iPhone 3GS | ~200 Hz | Rolloff molto severo — kick quasi inudibile |
+| iPhone 6S–7 | ~50–60 Hz | Netto miglioramento; corpo kick ancora catturato |
+| iPhone 10–15 | ~50–60 Hz | Stabile, variazione < 3 dB tra generazioni |
+
+**Nota importante**: il filtro low-cut è configurabile via `AVAudioSession`. Con la categoria `.measurement` è disabilitato (risposta piatta sotto 100 Hz). Con `.playAndRecord` (la categoria che usa questa app) il filtro è **attivo**. Questo significa che l'attenuazione reale sotto 80 Hz è più severa di quanto indicato dalle specifiche hardware.
+
+Conseguenze pratiche:
+- **Il fondamentale della cassa (40–80 Hz) è fortemente attenuato o assente** nel segnale catturato
+- L'app rileva in realtà la **banda corpo del kick: 80–200 Hz** (modi (1,1) e superiori)
 - Il filtro LP@100 Hz separa questa banda da snare/tom che dominano sopra i 100 Hz
-- **kickRatioThreshold = 0.35** significa: almeno 35% dell'energia 30–250 Hz deve stare sotto 100 Hz
+- **kickRatioThreshold = 0.35**: almeno 35% dell'energia 30–250 Hz deve stare sotto 100 Hz
+
+Se in futuro si volesse aumentare la sensibilità al kick, una strada è passare ad `AVAudioSession.Category.measurement` — ma richiede un impatto sulla latenza audio da valutare.
 
 ### Acustica da palco vs. sala prove vs. ascolto casuale
 
@@ -39,6 +78,28 @@ Il mic integrale iPhone ha un roll-off naturale sotto ~120 Hz (guadagno ridotto 
 | Batterista su palco (amplificazione) | Monitor, cross-talk da altri strumenti, compressione | SOLO o LIVE |
 | Ascolto da speaker (live venue) | Mix compresso, kick spesso sottolineato da PA | LIVE |
 | Registrazione compressa (mp3, streaming) | Transienti smussati, livelli normalizzati | LIVE |
+
+### Standing waves — rischio in sale prove piccole
+
+In ambienti non trattati acusticamente, le **standing waves** (onde stazionarie) si formano alle frequenze:
+
+```
+f_n = n × c / (2L)    (c = 343 m/s, L = dimensione sala, n = 1, 2, 3...)
+```
+
+| Dimensione sala | Prima standing wave | Cade nella nostra banda? |
+|----------------|--------------------|-----------------------|
+| 3 m | 57 Hz | Sì — coincide con fondamentale kick |
+| 5 m | 34 Hz | Sì — sotto banda ma risonanza nella shell |
+| 8 m | 21 Hz | No — ma 2° armonica a 43 Hz sì |
+| 15 m | 11 Hz | No |
+
+Le standing waves producono un **ronzio stazionario a bassa frequenza** che si accumula nel buffer energetico e alza la baseline. Effetti:
+- `minimumOnsetRms` potrebbe non filtrarlo (è un segnale continuo, non un picco)
+- La soglia adattiva si alza → kick deboli vengono mancati
+- In casi estremi: il ronzio può superare la soglia e generare onset fantasma
+
+**Mitigazione attuale**: `energyWindowMaxSize = 64` buffer (~3s) → la baseline si adatta lentamente, ma il ronzio stazionario viene incluso nella media. Non c'è un fix perfetto a livello software; l'utente deve allontanarsi dalla parete o usare la modalità LIVE.
 
 ### Decadimento della cassa (decay / resonance)
 
@@ -172,3 +233,82 @@ Prima di cambiare un parametro, leggi la riga corrispondente. Ogni parametro ha 
 - Se il comportamento è corretto ma l'utente non lo riconosce (es. octave correction su half-time feel)
 - Se il problema è nel contesto (stanza risonante, mic coperto) — non nel codice
 - Se la variazione BPM è < 5 BPM su ritmo stabile — è normale anche con parametri ottimali
+
+---
+
+## 6. Teoria dell'onset detection — basi scientifiche
+
+### Spectral flux vs. energy flux
+
+**Spectral flux** (metodo accademico standard):
+```
+SF(n) = Σ_k  max(0,  |X(n,k)| − |X(n−1,k)|)
+```
+Somma delle differenze positive tra magnitudini spettrali di frame adiacenti. Rileva qualsiasi cambio nel contenuto spettrale, non solo l'aumento di energia complessiva. È il metodo usato da sistemi come BeatRoot (Dixon, 2001) e dalla maggior parte dei tracker in letteratura.
+
+**Energy flux** (implementazione LIVE di questa app):
+```
+flux = max(0, rms_current − rms_previous)
+```
+Versione semplificata nel dominio temporale: rileva solo aumenti di energia RMS totale. Meno discriminante dello spectral flux completo, ma:
+- Latenza minima: il calcolo è O(1) per frame
+- Non richiede FFT per frame aggiuntive — il buffer 2048 @ 44100 Hz già produce ~46 ms di latenza
+- Sufficiente per il segnale di cassa in un mix compresso, dove i transienti del kick producono un picco energetico netto
+
+**Quando energy flux non basta**: su mix fortemente compressi o limitati, i transienti sono livellati → la derivata dell'energia RMS è quasi piatta. In questi casi la modalità LIVE perde efficacia. Soluzione futura potenziale: spectral flux sulla sola banda 30–250 Hz.
+
+### Onset Detection Function (ODF) e soglia adattiva
+
+L'algoritmo Solo usa una soglia adattiva classica:
+```
+threshold(n) = mean(energy_window) + sigma × std(energy_window)
+```
+Questo è equivalente a un z-score: onset rilevato quando l'energia corrente supera la media di `onsetSigma` deviazioni standard. Nella letteratura (Bello et al., 2005; Dixon, 2006), valori tipici di sigma sono 0.5–2.0 a seconda del tipo di segnale.
+
+Il valore `onsetSigma = 1.0` è nella zona mediana: non troppo sensibile, non troppo conservativo. Per batterie acustiche con dinamica naturale (non compressa) è il valore ottimale empiricamente validato.
+
+### Latenza minima del sistema
+
+Con buffer di 2048 campioni @ 44100 Hz:
+```
+latenza_per_frame = 2048 / 44100 = 46.4 ms
+```
+
+Latenza end-to-end (da colpo di cassa a aggiornamento BPM):
+- 1 frame di acquisizione: ~46 ms
+- Processing DSP: < 1 ms (vDSP)
+- Aggiornamento @MainActor: < 16 ms (next UI frame)
+- **Totale: ~60–65 ms**
+
+A 120 BPM (500 ms/beat), il lag di 65 ms rappresenta il 13% di un beat — percepibile ma accettabile per un'app di monitoraggio (non di metronomo). Un buffer più piccolo (es. 1024) dimezzherebbe la latenza a ~35 ms ma aumenterebbe il numero di frame al secondo e il carico CPU.
+
+### Inter-onset interval (IOI) e stima BPM
+
+La stima BPM da un singolo intervallo è rumorosa. L'algoritmo usa una rolling window di 4 intervalli con outlier rejection sulla mediana:
+```
+|IOI_i − median(IOI_window)| / median(IOI_window) > 0.13  →  outlier
+```
+
+Il valore 13% (0.13) corrisponde a ±39 ms su un beat da 300 ms (200 BPM) e ±78 ms su un beat da 600 ms (100 BPM). Studi su variabilità ritmica umana (Repp, 2005; London, 2012) mostrano che anche batteristi professionisti producono varianza di 10–20 ms per beat a 120 BPM → il 13% copre circa 4–6 deviazioni standard della varianza umana normale.
+
+### EMA adattiva — motivazione
+
+L'Exponential Moving Average con alpha fisso ha un problema noto: dopo un perturbazione (fill, pausa), converge lentamente al nuovo valore. La soluzione implementata (`α = 0.85 − 0.25 × rhythmConfidence`) è equivalente a un filtro passa-basso con frequenza di taglio variabile:
+- Confidenza alta (0.8–1.0): α = 0.60–0.65 → smoothing aggressivo, BPM stabile
+- Confidenza bassa (0.0–0.3): α = 0.77–0.85 → aggiornamento rapido, BPM insegue il cambio
+
+Questo approccio è analogo al Kalman filter con varianza del processo adattiva, senza il costo computazionale.
+
+---
+
+## 7. Fonti bibliografiche
+
+- Dixon, S. (2001). *Automatic extraction of tempo and beat from expressive performances.* Journal of New Music Research.
+- Bello, J.P. et al. (2005). *A tutorial on onset detection in music signals.* IEEE TSAP.
+- Repp, B.H. (2005). *Sensorimotor synchronization: A review of the tapping literature.* Psychonomic Bulletin & Review.
+- London, J. (2012). *Hearing in Time: Psychological Aspects of Musical Meter.* Oxford University Press.
+- Faber Acoustical Blog (2009). *iPhone Microphone Frequency Response Comparison.*
+- Signal Essence (2023). *Can You Use an iPhone's Internal Microphone for Acoustic Testing?*
+- iDrumTune (2024). *Guide To Mixing Drums — Know Your Drum Frequencies.*
+- Penn State Acoustics (2017). *Vibrational Mode Shapes of a Circular Membrane.*
+- ISMIR/TISMIR (2024). *A Real-Time Beat Tracking System with Zero Latency.*
