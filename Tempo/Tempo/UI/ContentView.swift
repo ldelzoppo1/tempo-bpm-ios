@@ -12,40 +12,64 @@ struct ContentView: View {
                 endPoint: .bottom
             )
             .ignoresSafeArea()
-            ScrollView {
-                VStack(spacing: 8) {
-                    header
-                    BPMPanel()
-                    EnergyPanel()
-                    StatsRow()
-                    ModePanel()
-                    TapPanel()
-                    CronoPanel()
-                    toggleButton
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
-                .padding(.bottom, 20)
+            VStack(spacing: 6) {
+                header
+                BPMPanel()
+                EnergyPanel()
+                StatsRow()
+                TapPanel()
+                CronoPanel()
+                toggleButton
             }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
         }
     }
 
     private var header: some View {
-        HStack {
+        HStack(spacing: 8) {
             Text("KICKLINE")
                 .font(.system(size: 26))
                 .foregroundStyle(Color.tempoAccent)
             Spacer()
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(state.isListening ? Color.tempoGreen : Color.tempoMuted)
-                    .frame(width: 8, height: 8)
-                Text(state.isListening ? "IN ASCOLTO" : "FERMATO")
-                    .font(.system(size: 9))
-                    .foregroundStyle(state.isListening ? Color.tempoGreen : Color.tempoMuted)
-            }
+            modeToggle
+            statusIndicator
         }
-        .padding(.bottom, 4)
+        .padding(.bottom, 2)
+    }
+
+    private var modeToggle: some View {
+        HStack(spacing: 4) {
+            modeButton("SOLO", mode: .solo)
+            modeButton("LIVE", mode: .live)
+        }
+    }
+
+    private func modeButton(_ label: String, mode: DetectionMode) -> some View {
+        let isSelected = state.detectionMode == mode
+        return Button { state.detectionMode = mode } label: {
+            Text(label)
+                .font(.system(size: 9, weight: isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected ? Color.tempoAccent : Color.tempoMuted)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(isSelected ? Color.tempoAccent : Color.tempoBorder, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var statusIndicator: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(state.isListening ? Color.tempoGreen : Color.tempoMuted)
+                .frame(width: 8, height: 8)
+            Text(state.isListening ? "IN ASCOLTO" : "FERMATO")
+                .font(.system(size: 9))
+                .foregroundStyle(state.isListening ? Color.tempoGreen : Color.tempoMuted)
+        }
     }
 
     private var toggleButton: some View {

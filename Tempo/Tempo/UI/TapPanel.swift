@@ -38,14 +38,14 @@ struct TapPanel: View {
                     )
                     .overlay(
                         Text("TAP")
-                            .font(.system(size: 32, weight: .regular))
+                            .font(.system(size: 16, weight: .regular))
                             .foregroundStyle(state.tapOverrideActive ? Color.tempoAmber : Color.tempoText)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
                             .stroke(Color.tempoBorder, lineWidth: 1)
                     )
-                    .frame(height: 80)
+                    .frame(height: 39)
             }
             .buttonStyle(.plain)
         }
