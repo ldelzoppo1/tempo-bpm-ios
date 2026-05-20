@@ -101,6 +101,16 @@ final class BeatDetector: @unchecked Sendable {
     /// ambigua: parzialmente filtrate dal minimumOnsetRms e dall'SPL near-field del kick.
     private nonisolated static var liveKickRatioThreshold: Float { 0.20 }
 
+    /// Energia RMS minima assoluta per entrare nell'onset detection in modalità LIVE.
+    /// Più alta di minimumOnsetRms (0.040 in SOLO) perché in LIVE il noise floor è
+    /// significativamente più elevato: monitor laterali, ampli basso e vibrazioni del palco
+    /// producono RMS continuo tipicamente 0.020–0.050. Con 0.040 questi segnali ambientali
+    /// possono superare il gate e raggiungere il flux detector generando falsi positivi.
+    /// 0.060 (50% superiore a SOLO) garantisce che il gate blocchi il noise floor del palco:
+    /// il kick near-field (telefono sul kit) produce RMS ≥ 0.080–0.150 → margine adeguato.
+    /// Le note gravi del basso a ~3 m producono RMS tipicamente 0.020–0.050 — sotto la soglia.
+    private nonisolated static var liveMinimumOnsetRms: Float { 0.060 }
+
     // MARK: Kick classification constants
 
     /// Cutoff LP per separare banda cassa (< 100 Hz) dal rullante (100–250 Hz).
@@ -287,7 +297,12 @@ final class BeatDetector: @unchecked Sendable {
         fluxWindowHead = (fluxWindowHead + 1) % BeatDetector.energyWindowMaxSize
         if fluxWindowCount < BeatDetector.energyWindowMaxSize { fluxWindowCount += 1 }
 
-        guard rms > BeatDetector.minimumOnsetRms else { return }
+        // Gate energetico separato da SOLO: 0.060 vs 0.040.
+        // In LIVE il noise floor del palco (monitor, ampli basso, vibrazioni) raggiunge
+        // RMS 0.020–0.050. Usare la stessa soglia di SOLO lascerebbe passare questo rumore
+        // continuo al flux detector. Il kick near-field produce RMS ≥ 0.080 → il margine
+        // è adeguato. Le note gravi del basso a ~3 m rimangono tipicamente sotto 0.060.
+        guard rms > BeatDetector.liveMinimumOnsetRms else { return }
         guard fluxWindowCount >= 3 else { return }
 
         let (fluxMean, fluxStd) = computeStats(window: fluxWindow, head: fluxWindowHead,
