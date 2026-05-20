@@ -27,13 +27,27 @@ struct ModePanel: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
             .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(isSelected ? Color.tempoAccent.opacity(0.08) : Color.tempoDark)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(isSelected ? Color.tempoAccent : Color.tempoBorder, lineWidth: 1)
-                        )
-                )
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(
+                                isSelected
+                                    ? LinearGradient(
+                                        colors: [Color.tempoAccent.opacity(0.20), Color.tempoAccent.opacity(0.06)],
+                                        startPoint: .top, endPoint: .bottom
+                                      )
+                                    : LinearGradient(
+                                        colors: [Color.clear, Color.clear],
+                                        startPoint: .top, endPoint: .bottom
+                                      )
+                            )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(isSelected ? Color.tempoAccent : Color.tempoBorder, lineWidth: 1)
+                    )
+            )
         }
         .buttonStyle(.plain)
     }

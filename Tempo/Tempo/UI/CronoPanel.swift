@@ -33,9 +33,8 @@ struct CronoPanel: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(Color.tempoPanel)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.tempoBorder, lineWidth: 1))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.tempoBorder, lineWidth: 1))
     }
 
     // MARK: Chronometer
@@ -59,9 +58,8 @@ struct CronoPanel: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(Color.tempoPanel)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.tempoBorder, lineWidth: 1))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.tempoBorder, lineWidth: 1))
     }
 
     // MARK: Controls
@@ -99,10 +97,21 @@ struct CronoPanel: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
                 .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(isGreen ? Color.tempoGreen.opacity(0.08) : Color.tempoDark)
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(.ultraThinMaterial)
                         .overlay(
-                            RoundedRectangle(cornerRadius: 6)
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(
+                                    isGreen
+                                        ? LinearGradient(
+                                            colors: [Color.tempoGreen.opacity(0.18), Color.tempoGreen.opacity(0.05)],
+                                            startPoint: .top, endPoint: .bottom
+                                          )
+                                        : LinearGradient(colors: [Color.clear, Color.clear], startPoint: .top, endPoint: .bottom)
+                                )
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
                                 .stroke(isGreen ? Color.tempoGreen : Color.tempoBorder, lineWidth: 1)
                         )
                 )

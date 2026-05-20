@@ -22,12 +22,28 @@ struct TapPanel: View {
                 if tapTempo == nil { tapTempo = TapTempo(state: state) }
                 tapTempo?.tap()
             } label: {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.tempoDark)
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        (state.tapOverrideActive ? Color.tempoAmber : Color.tempoText).opacity(0.10),
+                                        Color.clear,
+                                    ],
+                                    startPoint: .top, endPoint: .bottom
+                                )
+                            )
+                    )
                     .overlay(
                         Text("TAP")
                             .font(.system(size: 32, weight: .regular))
                             .foregroundStyle(state.tapOverrideActive ? Color.tempoAmber : Color.tempoText)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.tempoBorder, lineWidth: 1)
                     )
                     .frame(height: 80)
             }
@@ -35,10 +51,9 @@ struct TapPanel: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color.tempoPanel)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.tempoBorder, lineWidth: 1)
         )
     }

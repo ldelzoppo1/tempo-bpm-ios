@@ -6,7 +6,12 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            Color.tempoBg.ignoresSafeArea()
+            LinearGradient(
+                colors: [.tempoGradTop, .tempoGradMid, .tempoGradBottom],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
             ScrollView {
                 VStack(spacing: 8) {
                     header
@@ -54,11 +59,23 @@ struct ContentView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
             .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill((state.isListening ? Color.tempoGreen : Color.tempoAccent).opacity(0.06))
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(.ultraThinMaterial)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(state.isListening ? Color.tempoGreen : Color.tempoAccent, lineWidth: 2)
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        (state.isListening ? Color.tempoGreen : Color.tempoAccent).opacity(0.18),
+                                        (state.isListening ? Color.tempoGreen : Color.tempoAccent).opacity(0.06),
+                                    ],
+                                    startPoint: .top, endPoint: .bottom
+                                )
+                            )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(state.isListening ? Color.tempoGreen : Color.tempoAccent, lineWidth: 1.5)
                     )
             )
         }

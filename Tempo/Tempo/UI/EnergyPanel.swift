@@ -17,7 +17,16 @@ struct EnergyPanel: View {
                     ForEach(0..<bandCount, id: \.self) { i in
                         let energy = CGFloat(i < state.energyBands.count ? state.energyBands[i] : 0)
                         RoundedRectangle(cornerRadius: 1)
-                            .fill(Color.tempoAccent.opacity(0.46 + 0.48 * Double(energy)))
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.tempoAccent.opacity(0.55 + 0.45 * energy),
+                                        Color.tempoAccent.opacity(0.20 + 0.30 * energy),
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
                             .frame(width: barW, height: max(4, geo.size.height * energy))
                             .animation(.easeOut(duration: 0.06), value: energy)
                     }
@@ -28,10 +37,9 @@ struct EnergyPanel: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color.tempoPanel)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.tempoBorder, lineWidth: 1)
         )
     }

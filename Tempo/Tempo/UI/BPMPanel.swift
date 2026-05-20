@@ -19,10 +19,9 @@ struct BPMPanel: View {
             }
             .padding(12)
         }
-        .background(Color.tempoPanel)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.tempoBorder, lineWidth: 1)
         )
     }
@@ -104,11 +103,11 @@ struct BPMPanel: View {
     private var beatDots: some View {
         HStack(spacing: 12) {
             ForEach(0..<4, id: \.self) { i in
+                let isActive = i == state.beatPosition % 4 && state.currentBPM > 0
                 Circle()
-                    .fill(i == state.beatPosition % 4 && state.currentBPM > 0
-                          ? Color.tempoAccent
-                          : Color.tempoMuted)
+                    .fill(isActive ? Color.tempoAccent : Color.tempoMuted)
                     .frame(width: 10, height: 10)
+                    .shadow(color: isActive ? Color.tempoAccent.opacity(0.8) : .clear, radius: 6)
                     .animation(.easeOut(duration: 0.1), value: state.beatPosition)
             }
         }
