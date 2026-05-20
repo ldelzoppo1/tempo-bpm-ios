@@ -17,7 +17,7 @@ final class TapTempoTests: XCTestCase {
 
     var state: BeatState!
     var tapTempo: TapTempo!
-    var clock: FakeClock!
+    private var clock: FakeClock!
 
     override func setUp() async throws {
         clock = FakeClock()

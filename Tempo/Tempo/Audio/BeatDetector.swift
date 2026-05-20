@@ -18,11 +18,11 @@ private let bdLog = Logger(subsystem: "com.ldelzoppo.tempo", category: "BeatDete
 /// 2. Soglia dinamica = media + deviazione standard dell'energia in finestra
 ///    scorrevole adattiva (4 beat stimati, tra 22 e 64 buffer a 44100/2048 Hz).
 /// 3. Onset se `rms > soglia`.
-/// 4. Refrattario: minimo 400 ms tra onset (max 150 BPM).
+/// 4. Refrattario: minimo 350 ms tra onset (max 171 BPM).
 /// 5. Holddown anti-risonanza: entro 450 ms dall'ultimo onset, il nuovo onset
-///    viene accettato solo se la sua energia ≥ 35 % di quella precedente.
+///    viene accettato solo se la sua energia ≥ 20 % di quella precedente.
 ///    Previene la doppia rilevazione della coda di decadimento della cassa.
-/// 6. Intervallo massimo: 2000 ms — intervalli più lunghi indicano pausa.
+/// 6. Intervallo massimo: 2400 ms — intervalli più lunghi indicano pausa.
 /// 7. Outlier rejection: nuovo intervallo scartato se devia > ±13 % dalla
 ///    mediana degli ultimi 4 intervalli validi.
 ///
@@ -49,10 +49,11 @@ final class BeatDetector: @unchecked Sendable {
     /// Onset se rms > media + std × onsetSigma.
     private nonisolated static var onsetSigma: Float { 1.0 }
 
-    /// Periodo refrattario minimo tra due onset (400 ms → max 150 BPM).
-    /// 400 ms previene il lock su coppie di hit ravvicinate (es. kick + colpo sincopato
-    /// a ~395 ms) che falserebbero il BPM rilevato.
-    private nonisolated static var refractorySeconds: Double { 0.400 }
+    /// Periodo refrattario minimo tra due onset (350 ms → max 171 BPM).
+    /// Abbassato da 400 ms per coprire punk, ska veloce e rock a 160–171 BPM.
+    /// Le risonanze della cassa nella finestra 350–450 ms rimangono filtrate
+    /// dall'holddown (holddownSeconds = 0.450, resonanceHolddownRatio = 0.20).
+    private nonisolated static var refractorySeconds: Double { 0.350 }
 
     /// Finestra holddown anti-risonanza: dopo un onset, un nuovo onset viene
     /// accettato entro questa finestra solo se la sua energia ≥
@@ -65,8 +66,10 @@ final class BeatDetector: @unchecked Sendable {
     /// del kick anche da speaker del telefono).
     private nonisolated static var resonanceHolddownRatio: Float { 0.20 }
 
-    /// Intervallo massimo valido tra onset (2000 ms → min 30 BPM).
-    private nonisolated static var maxIntervalSeconds: Double { 2.000 }
+    /// Intervallo massimo valido tra onset (2400 ms → min 25 BPM).
+    /// Alzato da 2000 ms per coprire 3/4, 7/4 e brani lenti con kick rado
+    /// (doom metal, ballad jazz) dove l'intervallo kick supera i 2000 ms.
+    private nonisolated static var maxIntervalSeconds: Double { 2.400 }
 
     /// Soglia outlier: intervallo scartato se devia > 13 % dalla mediana degli ultimi N.
     /// Un batterista umano non varia il tempo di più del 5-8% tra beat consecutivi;
@@ -389,7 +392,7 @@ final class BeatDetector: @unchecked Sendable {
 
         let interval = time - lastOnsetTime
 
-        // Step A — Valida range BPM (30–200 BPM → 300 ms–2000 ms).
+        // Step A — Valida range BPM (25–171 BPM → 350 ms–2400 ms).
         guard interval >= BeatDetector.refractorySeconds,
               interval <= BeatDetector.maxIntervalSeconds else { return }
 
