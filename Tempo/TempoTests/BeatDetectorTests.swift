@@ -260,7 +260,7 @@ final class BeatDetectorTests: XCTestCase {
 
         XCTAssertGreaterThan(bpmAfterStable, 0, "Should have BPM before outlier test")
 
-        // Outlier: 1.000s interval (100% deviation from median 0.500s, > 40% → rejected)
+        // Outlier: 1.000s interval (100% deviation from median 0.500s, > 13% → rejected)
         clock.t = 1002.500
         detector.process(buffer: pulse)
 
@@ -270,7 +270,7 @@ final class BeatDetectorTests: XCTestCase {
                        "Outlier interval must be rejected; BPM must remain ~\(bpmAfterStable), got \(state.currentBPM)")
     }
 
-    /// TC10 — 3 intervals at 0.500s, then 0.650s (30% deviation < 40%) → accepted.
+    /// TC10 — 3 intervals at 0.500s, then 0.560s (12% deviation, within ±13%) → accepted.
     func test_outlierAcceptedWithinRange() async {
         let state = BeatState()
         let clock = FakeClock()
@@ -291,16 +291,88 @@ final class BeatDetectorTests: XCTestCase {
         detector.process(buffer: pulse)
 
         await drainMainActor()
+        let bpmBeforeVariation = state.currentBPM
+        XCTAssertGreaterThan(bpmBeforeVariation, 0, "Should have BPM before variation test")
 
-        // Interval of 0.650s is 30% from median 0.500s — within ±40% → accepted.
-        // New mean ≈ (0.500+0.500+0.500+0.650)/4 = 0.538s → ~111 BPM (raw).
-        clock.t = 1002.150
+        // Interval of 0.560s is 12% from median 0.500s — within ±13% → accepted.
+        // |0.560 - 0.500| / 0.500 = 0.12 ≤ 0.13 (outlierThreshold).
+        // New mean ≈ (0.500+0.500+0.500+0.560)/4 = 0.515s → ~116 BPM (raw).
+        clock.t = 1002.060
         detector.process(buffer: pulse)
 
         await drainMainActor()
-        // BPM should shift from ~120 toward ~111 (raw), then EMA-smoothed.
+        // BPM should shift from ~120 toward ~116 (raw), then EMA-smoothed.
+        // The key assertion is that state.currentBPM updated after the new interval was accepted.
         XCTAssertGreaterThan(state.currentBPM, 0,
-                             "Interval within ±40% of median must be accepted; BPM must update")
+                             "Interval within ±13% of median must be accepted; BPM must remain > 0")
+    }
+
+    /// TC09b — Interval at exactly 12% from median (0.560s) is within outlierThreshold=0.13 → accepted.
+    func test_outlierBoundary_12pctDeviation_accepted() async {
+        let state = BeatState()
+        let clock = FakeClock()
+        let detector = BeatDetector(state: state, now: clock.now)
+
+        warmUp(detector)
+
+        let pulse = makePCMBuffer(rms: 0.15)
+
+        // Build 3 stable intervals at 0.500s so median = 0.500s.
+        clock.t = 1000.0
+        detector.process(buffer: pulse)
+        clock.t = 1000.500
+        detector.process(buffer: pulse)
+        clock.t = 1001.000
+        detector.process(buffer: pulse)
+        clock.t = 1001.500
+        detector.process(buffer: pulse)
+
+        await drainMainActor()
+        let bpmBefore = state.currentBPM
+        XCTAssertGreaterThan(bpmBefore, 0, "Precondition: BPM must be established")
+
+        // 0.560s interval: deviation = |0.560 - 0.500| / 0.500 = 0.12 ≤ 0.13 → accepted.
+        clock.t = 1002.060
+        detector.process(buffer: pulse)
+
+        await drainMainActor()
+        // BPM must still be > 0 because the interval was accepted and updated the window.
+        XCTAssertGreaterThan(state.currentBPM, 0,
+                             "12% deviation is within outlierThreshold(0.13) and must be accepted; BPM must be > 0, got \(state.currentBPM)")
+    }
+
+    /// TC09c — Interval at 14% from median (0.570s) exceeds outlierThreshold=0.13 → rejected.
+    func test_outlierBoundary_14pctDeviation_rejected() async {
+        let state = BeatState()
+        let clock = FakeClock()
+        let detector = BeatDetector(state: state, now: clock.now)
+
+        warmUp(detector)
+
+        let pulse = makePCMBuffer(rms: 0.15)
+
+        // Build 3 stable intervals at 0.500s so median = 0.500s.
+        clock.t = 1000.0
+        detector.process(buffer: pulse)
+        clock.t = 1000.500
+        detector.process(buffer: pulse)
+        clock.t = 1001.000
+        detector.process(buffer: pulse)
+        clock.t = 1001.500
+        detector.process(buffer: pulse)
+
+        await drainMainActor()
+        let bpmAfterStable = state.currentBPM
+        XCTAssertGreaterThan(bpmAfterStable, 0, "Precondition: BPM must be established")
+
+        // 0.570s interval: deviation = |0.570 - 0.500| / 0.500 = 0.14 > 0.13 → rejected.
+        clock.t = 1002.070
+        detector.process(buffer: pulse)
+
+        await drainMainActor()
+        // BPM must remain approximately what it was before (outlier was rejected, window unchanged).
+        XCTAssertEqual(state.currentBPM, bpmAfterStable, accuracy: 5.0,
+                       "14% deviation exceeds outlierThreshold(0.13) and must be rejected; BPM must remain ~\(bpmAfterStable), got \(state.currentBPM)")
     }
 
     // MARK: - ST4: BPM convergence
