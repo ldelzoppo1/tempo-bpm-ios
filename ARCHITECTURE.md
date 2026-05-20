@@ -155,53 +155,47 @@ ioBufferDuration: 0.005  // ~5ms latenza
 ## Algoritmo beat detection
 
 ```
-1. RMS buffer corrente
-        │
-        ▼
-2. Aggiorna finestra scorrevole energia (~22 campioni, ~1s)
-        │
-        ▼
-3. Soglia = media_finestra + std_finestra × 0.7
-        │
-        ▼
-4. RMS > soglia  AND  soglia > 0.001 ?
-        │
-       YES
-        │
-        ▼
-5. Kick discrimination: LP@100Hz → kickRMS / totalRMS ≥ 0.28 ?
-        │
-       YES → onset confermato
-        │
-        ▼
-6. Refrattario: Δt ≥ 300ms dal precedente onset ?
-        │
-       YES
-        │
-        ▼
-7. Outlier rejection: |intervallo - mediana_ultimi_N| / mediana ≤ 40% ?
-        │
-       YES
-        │
-        ▼
-8. Rolling window ultimi 4 intervalli → media → BPM
-        │
-        ▼
-9. Pubblica su BeatState via @MainActor
-        │
-        ▼
-10. Avvia/riavvia timer 3s: se nessun onset arriva, azzera currentBPM
+Modalità SOLO (sala prove, batterista da solo)
+──────────────────────────────────────────────
+1. RMS buffer corrente (vDSP_rmsqv)
+2. Gate: rms < 0.040 (minimumOnsetRms) → scarta
+3. Finestra scorrevole adattiva: size = 4 × buffersPerBeat, clamp [22, 64]
+4. Soglia = media_finestra + std_finestra × 1.0 (onsetSigma)
+5. rms ≤ soglia → scarta
+6. Refrattario: Δt < 400ms → scarta  (max 150 BPM)
+7. Holddown anti-risonanza: Δt < 450ms  AND  rms < lastOnsetRms × 0.20 → scarta
+8. Kick filter LP@100Hz: kickRMS / totalRMS < 0.35 → scarta
+9. Outlier rejection: |IOI − mediana_ultimi_4| / mediana > 13% → scarta
+        (abbassa rhythmConfidence di 0.3 su outlier)
+10. Octave correction: rawBPM < 80 → rawBPM × 2
+11. rhythmConfidence += 0.12  (cap 1.0)
+12. EMA adattiva: α = 0.85 − 0.25 × rhythmConfidence → currentBPM
+13. Pubblica su BeatState via @MainActor
+14. beatResetTask: nessun onset per 3s → azzera currentBPM
+
+Modalità LIVE (palco con altri strumentisti, noise floor alto)
+──────────────────────────────────────────────────────────────
+Stesso gate RMS (minimumOnsetRms) e stessa finestra adattiva.
+flux = max(0, rms − prevRMS)   ← derivata positiva dell'energia
+Soglia flux = media_flux + std_flux × 1.5 (liveFluxSigma)
+flux > soglia → onset  (stesso refrattario + holddown, senza kick filter)
 ```
 
 **Parametri** (costanti in `BeatDetector`):
 ```swift
-static var onsetSigma: Float      = 0.7    // soglia = media + std × onsetSigma
-static var energyWindowSize: Int  = 22     // campioni finestra ~1s
-static var refractorySeconds: Double = 0.300
-static var maxIntervalSeconds: Double = 2.000
-static var outlierThreshold: Double  = 0.40
-static var bpmWindowSize: Int     = 4
-static var kickRatioThreshold: Float = 0.28
+onsetSigma:             Float  = 1.0    // soglia = media + std × onsetSigma
+energyWindowSize:       Int    = 22     // minimo (BPM alti, ~1s)
+energyWindowMaxSize:    Int    = 64     // massimo (warm-up / BPM bassi, ~3s)
+refractorySeconds:      Double = 0.400  // max 150 BPM (60 / 0.400)
+holddownSeconds:        Double = 0.450  // finestra anti-risonanza cassa
+resonanceHolddownRatio: Float  = 0.20   // energia minima per superare holddown
+maxIntervalSeconds:     Double = 2.000
+outlierThreshold:       Double = 0.13   // 13% dalla mediana (varianza umana ~10%)
+bpmWindowSize:          Int    = 4
+minimumOnsetRms:        Float  = 0.040  // gate energetico assoluto
+liveFluxSigma:          Float  = 1.5
+kickCutoffHz:           Double = 100.0
+kickRatioThreshold:     Float  = 0.35   // Solo mode: energia kick / energia totale
 ```
 
 ---

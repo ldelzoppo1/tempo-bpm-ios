@@ -10,7 +10,7 @@ final class TapTempo {
         self.state = state
     }
 
-    func tap() {
+    @MainActor func tap() {
         let t = CFAbsoluteTimeGetCurrent()
         if let last = timestamps.last, t - last > 3.0 { timestamps.removeAll() }
         timestamps.append(t)
@@ -30,14 +30,14 @@ final class TapTempo {
         state?.tapOverrideActive = true
 
         resetTask?.cancel()
-        resetTask = Task { [weak self] in
+        resetTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled else { return }
             self?.state?.tapOverrideActive = false
         }
     }
 
-    func reset() {
+    @MainActor func reset() {
         timestamps.removeAll()
         resetTask?.cancel()
         resetTask = nil

@@ -21,6 +21,7 @@ struct TempoApp: App {
 
     private func startAudioPipeline() {
         guard audioEngine == nil else { return }
+        UIApplication.shared.isIdleTimerDisabled = true
         let engine   = AudioEngine(state: beatState)
         let detector = BeatDetector(state: beatState)
         audioEngine   = engine

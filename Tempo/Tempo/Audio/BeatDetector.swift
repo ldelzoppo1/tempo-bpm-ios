@@ -18,7 +18,7 @@ private let bdLog = Logger(subsystem: "com.ldelzoppo.tempo", category: "BeatDete
 /// 2. Soglia dinamica = media + deviazione standard dell'energia in finestra
 ///    scorrevole adattiva (4 beat stimati, tra 22 e 64 buffer a 44100/2048 Hz).
 /// 3. Onset se `rms > soglia`.
-/// 4. Refrattario: minimo 300 ms tra onset (max 200 BPM).
+/// 4. Refrattario: minimo 400 ms tra onset (max 150 BPM).
 /// 5. Holddown anti-risonanza: entro 450 ms dall'ultimo onset, il nuovo onset
 ///    viene accettato solo se la sua energia ≥ 35 % di quella precedente.
 ///    Previene la doppia rilevazione della coda di decadimento della cassa.
