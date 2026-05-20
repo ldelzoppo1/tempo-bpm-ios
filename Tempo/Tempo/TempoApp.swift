@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @main
 struct TempoApp: App {
@@ -37,6 +38,7 @@ struct TempoApp: App {
         beatDetector?.reset()
         audioEngine  = nil
         beatDetector = nil
+        UIApplication.shared.isIdleTimerDisabled = false
     }
 
     private func toggleAudioPipeline() {
@@ -44,6 +46,7 @@ struct TempoApp: App {
             stopAudioPipeline()
         } else {
             startAudioPipeline()
+            UIApplication.shared.isIdleTimerDisabled = true
         }
     }
 }
