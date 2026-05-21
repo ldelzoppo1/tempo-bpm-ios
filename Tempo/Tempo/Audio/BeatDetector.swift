@@ -23,7 +23,7 @@ private let bdLog = Logger(subsystem: "com.ldelzoppo.tempo", category: "BeatDete
 ///    scorrevole adattiva (4 beat stimati, tra 22 e 64 buffer a 44100/2048 Hz).
 /// 3. Onset se `rms > soglia`.
 /// 4. Refrattario: minimo 350 ms tra onset (max 171 BPM).
-/// 5. Holddown anti-risonanza: entro 450 ms dall'ultimo onset, il nuovo onset
+/// 5. Holddown anti-risonanza: entro 380 ms dall'ultimo onset, il nuovo onset
 ///    viene accettato solo se la sua energia ≥ 20 % di quella precedente.
 ///    Previene la doppia rilevazione della coda di decadimento della cassa.
 /// 6. Intervallo massimo: 2400 ms — intervalli più lunghi indicano pausa.
@@ -51,14 +51,18 @@ final class BeatDetector: @unchecked Sendable {
 
     /// Periodo refrattario minimo tra due onset (350 ms → max 171 BPM).
     /// Abbassato da 400 ms per coprire punk, ska veloce e rock a 160–171 BPM.
-    /// Le risonanze della cassa nella finestra 350–450 ms rimangono filtrate
-    /// dall'holddown (holddownSeconds = 0.450, resonanceHolddownRatio = 0.20).
+    /// Le risonanze della cassa nella finestra 350–380 ms rimangono filtrate
+    /// dall'holddown (holddownSeconds = 0.380, resonanceHolddownRatio = 0.20).
     private nonisolated static var refractorySeconds: Double { 0.350 }
 
     /// Finestra holddown anti-risonanza: dopo un onset, un nuovo onset viene
     /// accettato entro questa finestra solo se la sua energia ≥
     /// resonanceHolddownRatio × energia dell'ultimo onset.
-    private nonisolated static var holddownSeconds: Double { 0.450 }
+    /// 380 ms: il decay della cassa produce < 10 % dell'energia originale a
+    /// questo punto — bloccato dal ratio 0.20. Abbassato da 450 ms per evitare
+    /// che il kick successivo in four-on-the-floor a 136 BPM (IOI = 441 ms)
+    /// cadesse dentro la holddown window con margine negativo.
+    private nonisolated static var holddownSeconds: Double { 0.380 }
 
     /// Frazione minima di energia rispetto all'ultimo onset per onset nella
     /// holddown window. Le risonanze della cassa sono tipicamente ≤ 15%;
